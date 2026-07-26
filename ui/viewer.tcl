@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require tkdown
-package require streamdoc
+package require sessionview
 
 # Round-robin interleave of per-term hit-position lists, already ordered
 # rarest-term-first by the caller. Returns a flat list: the first hit of each
@@ -38,14 +38,14 @@ proc ::questlog::ui::rarity_round_robin {term_positions} {
 # it never grows or jumps under the reader. Renders one jsonl as a flat
 # sequence of turns broken into sections by:
 #   primary:   compact_boundary records.
-#   secondary: idle gaps over IdleGap minutes.
+#   secondary: idle gaps over the -idle_gap threshold (minutes).
 # Recap markers (long assistant turn after an idle gap) are tertiary cues
 # and not dividers.
 #
 # Search-within: Ctrl-F focuses an entry; Return advances to the next match.
 
 oo::class create ::questlog::ui::Viewer {
-    superclass ::streamdoc::StreamDoc
+    superclass ::sessionview::SessionView
     mixin leash
     variable Top
     variable Empty            ;# centered empty-state frame, shown until first load
@@ -68,7 +68,6 @@ oo::class create ::questlog::ui::Viewer {
                               ;# readout and the band highlight both read it, and
                               ;# find_next steps it (the sole find/step cursor)
     variable FindPos          ;# find-bar "N of M" readout text ("" while cleared)
-    variable IdleGap          ;# minutes
     variable LineMap          ;# dict: jsonl line offset (1-based) -> text index
     variable Menu             ;# right-click context menu
     variable MenuTarget       ;# dict capturing the clicked target
@@ -144,8 +143,6 @@ oo::class create ::questlog::ui::Viewer {
     variable IconClosed       ;# toggle photo, list hidden (dim left pane)
     variable Query            ;# the active search ({terms .. nocase ..} or {}), re-applied after a streamed turn
     variable LoadedLines      ;# count of physical jsonl lines consumed, so a streamed turn tails only the new ones
-    variable RenderTs         ;# trailing render state: epoch of the last content turn, carried into append_new
-    variable RenderInSection  ;# trailing render state: 1 while a section header is open
     variable RenderModel      ;# trailing render state: model id of the last chipped assistant record, reset per turn; drives the per-turn model chip
     # Resume prompt bar: a one-shot `claude -p --resume` for the loaded session,
     # summoned like Find, its turn streamed back into the transcript.
@@ -170,7 +167,6 @@ oo::class create ::questlog::ui::Viewer {
         set Top $parent
         set Shown 0
         set Path ""
-        set IdleGap [::questlog::config::get viewer_idle_gap_min]
         set FindVar ""
         set FindMatches [list]
         set FindCur -1
@@ -206,8 +202,6 @@ oo::class create ::questlog::ui::Viewer {
         set CwdFull ""
         set Query ""
         set LoadedLines 0
-        set RenderTs 0
-        set RenderInSection 0
         set RenderModel ""
         set PromptVar ""
         set PermVar readonly
@@ -221,10 +215,12 @@ oo::class create ::questlog::ui::Viewer {
         set RunPath ""
         set ErrBuf ""
         my build
-        # Streamdoc host wiring: the base class drives the transcript widget
-        # built above (the shared Text), keeps a tail reader latched across
-        # streamed appends, and its first reset seeds the region store.
-        my configure -autofollow 1
+        # Base-class host wiring: sessionview (and streamdoc under it) drives
+        # the transcript widget built above (the shared Text), keeps a tail
+        # reader latched across streamed appends, and its first reset seeds
+        # the region store and the render/find/live state.
+        my configure -autofollow 1 \
+            -idle_gap [::questlog::config::get viewer_idle_gap_min]
         my reset
         foreach v {Turns CurTurn} {
             trace add variable [my varname $v] read [list [self] turns_surface]
@@ -969,208 +965,60 @@ oo::class create ::questlog::ui::Viewer {
     }
 
     method render {} {
-        # The base class's reset wipes the buffer, every region's marks and the
-        # per-turn f#N/d#N elide tag families in one sweep; the app-side
-        # caches rebuild below. tkdown sweeps its own per-table tags.
-        my reset
+        # The record walk is the base class's render_records: its reset wipes
+        # the buffer, every region's marks and the per-turn f#N/d#N elide tag
+        # families (tkdown sweeps its own per-table tags), then re-renders
+        # the loaded records and leaves the final turn open (a session can
+        # always grow), its detail summary the trailing content line
+        # append_new's door knows to pop and recount. The app-side caches the
+        # render hooks refill are cleared here first. Quotes are captured
+        # during render (insert_quote_text), so a wholesale re-render clears
+        # them; a streamed turn appends without re-render.
         set Roles [dict create]
         set Bodies [dict create]
-        ::tkdown::forget $Text
-        # Quotes are captured during render (insert_quote_text), so a wholesale
-        # re-render clears them here; a streamed turn appends without re-render.
         $QuoteList delete 0 end
         set QuoteIdx [list]
         set QuoteBodies [list]
-        set RenderTs 0
-        set RenderInSection 0
         set RenderModel ""
-        $Text configure -state normal
-        foreach rec $Records {
-            lassign [my render_record_turned $rec $RenderTs $RenderInSection] \
-                RenderTs RenderInSection
-        }
-        # The final turn stays open (a session can always grow); it still
-        # shows its detail summary, appended as the trailing content line
-        # where append_new's door knows to pop and recount it.
-        my summary_sync
-        $Text configure -state disabled
+        my render_records $Records
     }
 
-    # Render one record at the end of the transcript and return the trailing
-    # {last_ts in_section} state it advances: last_ts is the epoch of the most
-    # recent content turn (for idle-gap detection), in_section is 1 while a
-    # section header is open. Pulled out of render so the wholesale fill and the
-    # streamed append (append_new) make identical divider and header decisions.
-    # The per-record cues - compact boundary, empty-body clock advance, idle
-    # gap - come from ::logman::transcript_step, the one classifier
-    # this method and the markdown export both fold over (issue #31), so a
-    # divider rule lands on both surfaces at once. The
-    # step owns classification and the clock only: every glyph and tag, the
-    # in_section tracking, the section headers and the label/body rendering
-    # stay here. The caller holds $Text in -state normal.
-    method render_record {rec last_ts in_section} {
-        set t [dict getdef $rec type ""]
-        # last-prompt records are repeated, truncated harness snapshots of the
-        # most recent user prompt: the harness writes the same value many times,
-        # and it echoes the real user turn already shown. Not part of the
-        # conversation, so this viewer-side pre-filter drops them upstream of
-        # the step - a deliberate fork from the markdown export, which renders
-        # them as SYSTEM turns and lets them advance the clock; converging the
-        # two is a separate decision nobody has made (the step's contract
-        # comment records the divergence).
-        if {$t eq "last-prompt"} { return [list $last_ts $in_section] }
-        set lineno [dict get $rec _line]
-
-        # The step hands back this record's cues in render order; the switch
-        # owns their look. A compact boundary is the primary divider - the
-        # step's returned clock is 0, and the section closes so the next turn
-        # opens under a fresh header. An idle gap is the secondary divider,
-        # already ordered above its turn's body. The body event says THAT the
-        # record renders and supplies the flat extract_text copy (the
-        # Bodies($line) contract below); HOW it renders stays keyed off the
-        # record itself. A record yielding no body event draws nothing - the
-        # step advanced the clock over it, so a gap still spans quiet metadata
-        # records.
-        lassign [::logman::transcript_step $rec $last_ts $IdleGap] \
-            events last_ts
-        set body ""
-        foreach ev $events {
-            switch -- [lindex $ev 0] {
-                compact {
-                    $Text insert end "─── /compact ───\n" compact-divider
-                    set in_section 0
-                }
-                gap {
-                    $Text insert end \
-                        "─── [my fmt_gap [lindex $ev 1]] later ───\n" divider
-                    set in_section 0
-                }
-                body {
-                    set body [lindex $ev 1]
-                }
-            }
-        }
-        if {[::questlog::debug::enabled]} {
-            ::questlog::debug::log render "line $lineno type=$t\
-                empty=[expr {$body eq ""}]\
-                tools=[llength [::logman::record_tool_uses $rec]]"
-        }
-        if {$body eq ""} { return [list $last_ts $in_section] }
-
-        set ts_iso [::logman::record_timestamp $rec]
-        if {!$in_section} {
-            $Text insert end "[my section_header $ts_iso]\n" section-header
-            set in_section 1
-        }
-
-        # Map this jsonl line to the current text index.
-        set start_idx [$Text index "end-1l linestart"]
-        dict set LineMap $lineno $start_idx
+    # The base class's per-record hook, after the role label and before the
+    # body: the app caches (Bodies($line) is the raw extract_text the copy
+    # affordances lift, Roles($line) colours the index rows, CurTs is the
+    # stamp a quote box in this record reads), then the model chip on the
+    # assistant header line - the first assistant of each turn always chips
+    # (the turn boundary reset RenderModel to ""), a later assistant chips
+    # again only when its model differs (a mid-turn /model change).
+    method on_label_rendered {rec lineno body label ts_iso} {
         dict set Bodies $lineno $body
-        set CurTs $ts_iso        ;# a quote box in this record reads its time from here
-        set label [::logman::record_role_label $rec]
         dict set Roles $lineno $label
-        # Label -> tag: lowercased with spaces to underscores (TOOL RESULT ->
-        # lbl-tool_result). The four lbl-* tags are configured in build.
-        # A turn-start record's label line is its turn's header, a region
-        # boundary: the base class's region opens here, after the between-turn
-        # chrome above, so the divider and section header stay outside it
-        # (render_record_turned closed the previous region before this
-        # record). The payload carries what the app reads back per turn: the
-        # jsonl line, the prompt's first line, the stamp, and the detail
-        # tally the summary hook prints. The fold glyph heads the line
-        # (render_record_turned tags the completed line turnhdr after); the
-        # glyph rides in front of the label, so start_idx above still names
-        # the line and LineMap/Bodies/Roles keep their meaning untouched.
-        if {[::logman::is_turn_start $rec]} {
-            my region_open [dict create line $lineno \
-                label [lindex [split $body \n] 0] ts $ts_iso \
-                counts [dict create]]
-            $Text insert end "▾ " {foldglyph turnhdr}
-        }
-        $Text insert end "$label  " "lbl-[string map {{ } _} [string tolower $label]]"
-        # Model chip on the assistant header line, right after the role label and
-        # before the body: the first assistant of each turn always chips (the
-        # turn boundary reset RenderModel to ""), a later assistant chips again
-        # only when its model differs (a mid-turn /model change). RenderModel is
-        # unset for a bodiless assistant record (guarded above), so it takes none.
-        if {$t eq "assistant"} {
+        set CurTs $ts_iso
+        if {[dict getdef $rec type ""] eq "assistant"} {
             set mdl [::logman::record_model $rec]
             if {$mdl ne "" && $mdl ne $RenderModel} {
                 my insert_model_chip $mdl
                 set RenderModel $mdl
             }
         }
-        # Assistant and tool_result records render one content block at a time
-        # so each tool_use/thinking/image block is its own dk-* tagged region
-        # (a region detail-hiding can elide without touching the prose around
-        # it); prompts and system records keep the flat extract_text body.
-        # start_idx above is the record's whole extent either way, label line
-        # included, which is what a hidden tool_result record will cover.
-        if {$t eq "assistant" || [::logman::is_tool_result_record $rec]} {
-            my insert_blocks $rec
-        } else {
-            my insert_body $t $body
-        }
-
-        # The clock already advanced inside the step; last_ts is its return.
-        return [list $last_ts $in_section]
     }
 
-    # Turn-aware wrapper around render_record, the one entry both the
-    # wholesale fill and the streamed append use, so the base class's region
-    # store is driven identically in both. A turn-start record
-    # (is_turn_start; the rollback-list notion of a turn, so queued/sdk
-    # prompts stay inside the running one) first closes the open region -
-    # the closing summary must land before render_record emits the new
-    # turn's gap divider or section header, keeping the summary inside the
-    # old turn and the between-turns chrome outside every region - then
-    # renders, opening its own region at the header line (inside
-    # render_record, past the chrome). Every other record renders into the
-    # running region: a tool_result record is detail in its entirety (label
-    # line and trailing separator included, so hiding it leaves no residue).
-    # A fold held mid-stream is the base class's concern, not the caller's:
-    # append_new's append_close re-covers the fresh lines. A compact boundary closes
-    # nothing: the conversation resumes mid-turn.
+    # Layer over the base class's turn-aware record walk: reset the chip's
+    # model at each turn boundary so the first assistant of every turn
+    # re-chips even when unchanged from the prior turn; a same-model streamed
+    # continuation inside a turn is not re-chipped. The turn model itself
+    # (region close/open, the tool_result detail cover) is the base class's.
     method render_record_turned {rec last_ts in_section} {
-        # A turn start is gated on a body: a typed record whose extract_text
-        # is empty would render no header line to open a turn at, and closing
-        # the running turn for it would orphan everything after into
-        # always-visible preamble. Such a record is treated as any other
-        # bodiless one - the clock advances, the open turn keeps owning what
-        # follows. (render_record's own empty-body return is the second half
-        # of the gate: a region only opens once a header line rendered.)
         if {[::logman::is_turn_start $rec]
                 && [::logman::extract_text $rec] ne ""} {
-            my region_close
-            # Reset the chip's model at the turn boundary so the first assistant
-            # of every turn re-chips even when unchanged from the prior turn; a
-            # same-model streamed continuation inside a turn is not re-chipped.
             set RenderModel ""
-            lassign [my render_record $rec $last_ts $in_section] \
-                last_ts in_section
-            # The header line is complete now; tag it as the fold-toggle
-            # click zone the turnhdr binding serves.
-            if {[my live] >= 0} {
-                set s [dict get [my region_info [my live]] start]
-                $Text tag add turnhdr $s "$s lineend"
-            }
-            return [list $last_ts $in_section]
         }
-        lassign [my render_record $rec $last_ts $in_section] last_ts in_section
-        if {[my live] >= 0 && [::logman::is_tool_result_record $rec]} {
-            set lineno [dict get $rec _line]
-            if {[dict exists $LineMap $lineno]} {
-                $Text tag add [my detail_tag [my live]] \
-                    [dict get $LineMap $lineno] [$Text index "end-1l linestart"]
-            }
-        }
-        return [list $last_ts $in_section]
+        return [next $rec $last_ts $in_section]
     }
 
     # Append jsonl lines written since the last load/append (a streamed turn
-    # growing the file) to the end of the transcript, reusing render_record so
-    # the new turns look exactly like a fresh load. Re-reads from the top and
+    # growing the file) to the end of the transcript, through the base class's
+    # append_records so the new turns look exactly like a fresh load. Re-reads from the top and
     # skips already-rendered lines; cheap enough for one active stream. A line
     # without a trailing newline is the partial tail claude is mid-write on, so
     # it is left for the next pass. Auto-scrolls only if the reader was already
@@ -1211,30 +1059,12 @@ oo::class create ::questlog::ui::Viewer {
         # itself, with the open turn's summary as the last content line the
         # door knows to pop.
         my clear_endhint
-        # One base-class batch: it anchors the reader once (the autofollow latch
-        # keeps a tail reader at the tail), the door pops the open turn's
-        # summary so the records land inside the turn, and append_close
-        # re-covers a fold held during the stream and re-appends the summary
-        # with the caught-up counts.
-        my batch {
-            set m [my append_open]
-            foreach rec $recs {
-                lappend Records $rec
-                lassign [my render_record_turned $rec $RenderTs $RenderInSection] \
-                    RenderTs RenderInSection
-            }
-            my append_close $m
-        }
-        return [llength $recs]
-    }
-
-    # The boundary between session content and the trailing end-of-session
-    # hint: searches and the match index stop here so the hint's words are not
-    # treated as transcript matches. Returns "end" when no hint is present.
-    method content_end {} {
-        set r [$Text tag ranges endhint]
-        if {[llength $r]} { return [lindex $r 0] }
-        return "end"
+        # The base class appends them in one batch: it anchors the reader once
+        # (the autofollow latch keeps a tail reader at the tail), the door
+        # pops the open turn's summary so the records land inside the turn,
+        # and append_close re-covers a fold held during the stream and
+        # re-appends the summary with the caught-up counts.
+        return [my append_records $recs]
     }
 
     # Add the centred end-of-session hint at the very bottom, once. Kept out of
@@ -1258,20 +1088,20 @@ oo::class create ::questlog::ui::Viewer {
         $Text configure -state disabled
     }
 
-    # ---- turn folding and detail hiding: the streamdoc host skin -----------
+    # ---- turn folding and detail hiding: the app skin over sessionview -----
     #
-    # The streamdoc base class owns the regions (one per turn), their boundary
-    # marks and both elide layers - f#N the fold, d#N the detail, in that
-    # priority order - so nothing in the viewer mutates a tag's -elide. The
-    # priority rule still binds the app's own tags: none laid over a turn
-    # (body/dk-*/find/sel/tbl) may set an explicit -elide, or it would
-    # override the fold; all of them leave it unset, which never does.
+    # The sessionview base class owns the turn model - the click handlers,
+    # the stub summary hook, the record walk - and streamdoc under it owns
+    # the regions (one per turn), their boundary marks and both elide layers,
+    # f#N the fold and d#N the detail in that priority order, so nothing in
+    # the viewer mutates a tag's -elide. The priority rule still binds the
+    # app's own tags: none laid over a turn (body/dk-*/find/sel/tbl) may set
+    # an explicit -elide, or it would override the fold; all of them leave it
+    # unset, which never does.
     #
-    # What lives here is the app skin over the base class: the names the rest of
-    # the app and the tests call (thin delegates), hover-copy invalidation on
-    # the mass toggles and jumps, the click handlers behind the turnhdr/stub
-    # tag bindings, the summary hook that turns a payload's tally into the
-    # stub phrase, and the Turns/CurTurn read surface.
+    # What lives here is the app skin: the names the rest of the app and the
+    # tests call (thin delegates), hover-copy invalidation on the mass
+    # toggles and jumps, and the Turns/CurTurn read surface.
 
     # Folding the open turn folds to its region's end mark, which the endhint
     # sits inside while one stands: the hint elides with the body and returns
@@ -1298,49 +1128,7 @@ oo::class create ::questlog::ui::Viewer {
     # the next Motion re-places it.
     method reveal_index {idx} {
         my copy_hide
-        my reveal $idx
-    }
-
-    # The base class's summary hook: the open turn's trailing stub phrase from
-    # the payload's per-kind detail tally. Nonzero kinds only, "· 7 tool
-    # calls · 2 thinking". Tool results are not a kind of their own - they
-    # shadow their calls - unless a turn somehow holds results with no calls,
-    # where they are the only honest label. "" when the turn has no detail at
-    # all: such a turn takes no stub line.
-    method summary_text {payload} {
-        set counts [dict get $payload counts]
-        set parts [list]
-        set tu [dict getdef $counts tool_use 0]
-        set th [dict getdef $counts thinking 0]
-        set im [dict getdef $counts image 0]
-        set tr [dict getdef $counts tool_result 0]
-        if {$tu} { lappend parts "$tu tool call[expr {$tu == 1 ? "" : "s"}]" }
-        if {$th} { lappend parts "$th thinking" }
-        if {$im} { lappend parts "$im image[expr {$im == 1 ? "" : "s"}]" }
-        if {$tr && !$tu} {
-            lappend parts "$tr tool result[expr {$tr == 1 ? "" : "s"}]"
-        }
-        if {![llength $parts]} { return "" }
-        return "· [join $parts " · "]"
-    }
-
-    # The styling tag on every summary line the base class writes: `stub` carries
-    # the faint mono face and the detail-toggle click zone (build).
-    method region_tags {payload} { return [list stub] }
-
-    # Header/stub click handlers, shared by every turn through the two global
-    # tags; the click index says which turn. The sel guard is quote_copy_at's:
-    # a drag-select that merely releases over the line must not toggle it.
-    method turnhdr_click {x y} {
-        if {[$Text tag ranges sel] ne ""} return
-        set n [my region_at [$Text index @$x,$y]]
-        if {$n >= 0} { my toggle $n }
-    }
-
-    method stub_click {x y} {
-        if {[$Text tag ranges sel] ne ""} return
-        set n [my region_at [$Text index @$x,$y]]
-        if {$n >= 0} { my detail_toggle $n }
+        next $idx
     }
 
     # Regenerate the Turns/CurTurn read surface from the base class's region
@@ -1633,89 +1421,6 @@ oo::class create ::questlog::ui::Viewer {
         $Text insert end "  "        modelchip
     }
 
-    # Render an assistant or tool_result record body one content block at a
-    # time, per extract_blocks. Text blocks keep the whole markdown path
-    # (fences, tables, blockquotes) through insert_body; tool_use, thinking,
-    # tool_result and image blocks each become one dk-* tagged region, the
-    # regions detail-hiding elides per turn. Every block's content goes in
-    # verbatim as one contiguous run - lib/match.tcl indexes these exact
-    # strings, and search highlighting must keep landing on the same
-    # characters (issue #21) - so any visual lead-in is a separate dk-chrome
-    # insert that shifts no content offset.
-    method insert_blocks {rec} {
-        # Inside a turn every detail block also carries the region's detail
-        # elide tag (hidden by default, toggled by the turn's stub line) and
-        # bumps the per-kind tally the stub prints. Preamble records before
-        # the first turn carry neither: always visible.
-        set dtag [expr {[my live] >= 0 ? [my detail_tag [my live]] : ""}]
-        set last ""
-        set sawtext 0
-        foreach {btype content} [::logman::extract_blocks $rec] {
-            switch -- $btype {
-                assistant - user {
-                    my insert_body $btype $content
-                    set sawtext 1
-                }
-                thinking {
-                    # extract_blocks emits thinking bare, without the
-                    # "[thinking] " prefix extract_text carries; restore it as
-                    # chrome so the reading view is unchanged. The redacted
-                    # placeholder never carried the prefix, so it gets none.
-                    if {$dtag ne ""} { my count_detail thinking }
-                    if {$content ne "\[redacted thinking\]"} {
-                        $Text insert end "\[thinking\] " [concat dk-chrome $dtag]
-                    }
-                    $Text insert end "$content\n" [concat dk-thinking $dtag]
-                }
-                default {
-                    # tool_use / tool_result / image, one line per block.
-                    # tool_use content is format_tool_use_full, the very
-                    # string extract_text flattened, so the words on screen
-                    # do not change, only their tag.
-                    if {$dtag ne ""} { my count_detail $btype }
-                    $Text insert end "$content\n" [concat [list dk-$btype] $dtag]
-                }
-            }
-            set last $btype
-        }
-        # insert_body closes a text block with its own blank line; a record
-        # ending on a detail block still owes the record separator. The
-        # separator is itself detail only when a text block already ended the
-        # label's line: then hiding details leaves ordinary single-record
-        # spacing. Without one (a tool-only record) it must stay visible, or
-        # the bare label - whose own newline hides with its first block -
-        # would run into the next record's line.
-        if {$last ni {assistant user}} {
-            set sep body
-            if {$sawtext && $dtag ne ""} { set sep [list body $dtag] }
-            $Text insert end "\n" $sep
-        }
-        # A tool-only assistant record (no text block) is detail in its
-        # entirety, like a tool_result record: otherwise its bare label line
-        # stands visible with every block hidden, stacking empty "ASSISTANT"
-        # headers down a tool-heavy turn. Fold the whole record - label line
-        # and trailing separator included - into the turn's detail tag so it
-        # collapses with its tool_use blocks (already counted in the tally).
-        if {!$sawtext && $dtag ne ""} {
-            set lineno [dict get $rec _line]
-            if {[dict exists $LineMap $lineno]} {
-                $Text tag add $dtag [dict get $LineMap $lineno] \
-                    [$Text index "end-1l linestart"]
-            }
-        }
-    }
-
-    # Bump the open turn's tally of one detail kind; the summary line renders
-    # these numbers when the turn closes (or on summary_sync while it streams).
-    method count_detail {kind} {
-        set n [my live]
-        set p [my payload $n]
-        set c [dict get $p counts]
-        dict incr c $kind
-        dict set p counts $c
-        my payload_set $n $p
-    }
-
     # Render an assistant body that contains at least one blockquote run:
     # normal text inline, each blockquote run as an inset tagged block.
     method insert_segments {body} {
@@ -1928,24 +1633,6 @@ oo::class create ::questlog::ui::Viewer {
         if {[winfo exists $CopyBtn]} { $CopyBtn configure -text "⧉" }
     }
 
-    method section_header {ts_iso} {
-        set when [my fmt_iso $ts_iso]
-        return "▼ $when"
-    }
-
-    method fmt_iso {ts_iso} {
-        if {$ts_iso eq ""} { return "" }
-        set epoch [my parse_iso $ts_iso]
-        if {$epoch == 0} { return $ts_iso }
-        return [clock format $epoch -format "%a %d %b  %H:%M"]
-    }
-
-    # ISO->epoch and gap formatting are the shared session-segmentation
-    # clock (the logman module), so the viewer's dividers and the markdown export
-    # never disagree. Kept as thin methods so the call sites read `my ...`.
-    method parse_iso {ts_iso}  { return [::logman::parse_iso $ts_iso] }
-    method fmt_gap {minutes}   { return [::logman::fmt_gap $minutes] }
-
     # Scroll the reading view to a jsonl line. A directly mapped line (a turn
     # that rendered a text body) is shown as-is. A line with no anchor falls
     # back to the nearest mapped line at or before it: tool-use-only turns
@@ -1979,10 +1666,7 @@ oo::class create ::questlog::ui::Viewer {
 
     method find_hide {{restore 1}} {
         pack forget $Find
-        $Text tag remove find 1.0 end
-        set FindMatches [list]
-        set FindCur -1
-        set FindPos ""
+        my find_clear
         # Closing the overlay ends the transient Ctrl-F term. A term other than
         # the opening search retargets all three readers while it is live (issue
         # #51); once it is gone the two persistent readers - the Matches band and
@@ -1994,55 +1678,18 @@ oo::class create ::questlog::ui::Viewer {
         if {$restore} { my index_matches $Query }
     }
 
-    method find_next {} {
-        if {[llength $FindMatches] == 0 || $FindVar ne [my last_find_var]} {
-            set FindMatches [my collect_matches $FindVar]
-            set FindCur -1
-            my mark_find_var $FindVar
-            # A term other than the one the band shows recollected a different
-            # population: retarget all three readers on it (issue #51). Refilling
-            # the Matches band rows and the head-strip count from the recollected
-            # set makes the band's rows the live set, so select_band_row's
-            # exact-set gate then passes and its highlight tracks the step. An
-            # identical set (a first Next on the search term already shown) leaves
-            # the band untouched, keeping its rarest-first order and open state.
-            if {$FindMatches ne $BandMatchSet} { my refill_match_band }
-        }
-        if {[llength $FindMatches] == 0} {
-            set FindCur -1
-            # A search ran and found nothing: state the empty tally so "no
-            # matches" reads apart from "no search yet" (which blanks it).
-            set FindPos "0 of 0"
-            bell
-            return
-        }
-        # Advance to the next hit, wrapping. FindCur -1 (a freshly collected set,
-        # or an index just built, with nothing shown yet) steps to the first, so
-        # the first Next still surfaces hit 0 as it always has. FindCur then names
-        # the hit we are on, which the readout and the band highlight both read.
-        set FindCur [expr {$FindCur < 0 ? 0 : $FindCur + 1}]
-        if {$FindCur >= [llength $FindMatches]} { set FindCur 0 }
-        my reveal_index [lindex $FindMatches $FindCur]
-        my select_band_row $FindCur
-        my update_find_readout
+    # The base class's find hooks. On a recollect: a term other than the one
+    # the band shows collected a different population, so retarget all three
+    # readers on it (issue #51). Refilling the Matches band rows and the
+    # head-strip count from the recollected set makes the band's rows the
+    # live set, so select_band_row's exact-set gate then passes and its
+    # highlight tracks the step. An identical set (a first Next on the search
+    # term already shown) leaves the band untouched, keeping its rarest-first
+    # order and open state. On a step: move the band highlight with it.
+    method on_find_collected {} {
+        if {$FindMatches ne $BandMatchSet} { my refill_match_band }
     }
-
-    # The find bar's "N of M" readout. Reads the shared match set (FindMatches)
-    # and the active-hit cursor (FindCur); it collects nothing of its own. An
-    # empty set blanks the readout; find_next's own no-result path shows the
-    # explicit "0 of 0".
-    method update_find_readout {} {
-        set total [llength $FindMatches]
-        if {$total == 0} { set FindPos ""; return }
-        set cur [expr {$FindCur < 0 ? 1 : $FindCur + 1}]
-        set FindPos "$cur of $total"
-    }
-
-    # The entry text drifted from what was last collected: the readout counts the
-    # old set, so blank it until the next search re-establishes the tally.
-    method find_typing {} {
-        if {$FindVar ne [my last_find_var]} { set FindPos "" }
-    }
+    method on_find_stepped {i} { my select_band_row $i }
 
     # Move the docked match band's highlight to the hit we stepped to. Act only
     # when the band's rows are the very set we are stepping: a Ctrl-F retarget
@@ -2062,36 +1709,10 @@ oo::class create ::questlog::ui::Viewer {
         $MatchList see $i
     }
 
-    method collect_matches {pattern} {
-        $Text tag remove find 1.0 end
-        if {$pattern eq ""} { return [list] }
-        set results [list]
-        set start 1.0
-        while {1} {
-            set len 0
-            # -elide: without it `search` skips hidden text, and a hit inside
-            # an elided detail block must still be findable (it is what lets
-            # a jump reveal the block).
-            set m [$Text search -elide -count len -nocase -- $pattern $start [my content_end]]
-            if {$m eq ""} break
-            set start "$m + ${len}c"
-            # A stub's own words ("7 tool calls"), a header's fold glyph and a
-            # model chip's words ("Opus", "Sonnet", version digits) are turn
-            # chrome, not transcript; a hit there would step the reader nowhere
-            # useful, and a glyph hit would go stale the moment swap_glyph flips
-            # it.
-            set mtags [$Text tag names $m]
-            if {"stub" in $mtags || "foldglyph" in $mtags \
-                    || "modelchip" in $mtags} continue
-            $Text tag add find $m "$m + ${len}c"
-            lappend results $m
-        }
-        return $results
-    }
-
-    variable LastFindVar
-    method last_find_var {}    { return [expr {[info exists LastFindVar] ? $LastFindVar : ""}] }
-    method mark_find_var {v}   { set LastFindVar $v }
+    # The base skips stub and fold-glyph hits; the chip's words ("Opus",
+    # "Sonnet", version digits) are equally chrome, not transcript - a search
+    # for a family word or version number must never light every chip.
+    method find_chrome_tags {} { return [list stub foldglyph modelchip] }
 
     # Re-fill the Matches band and the head-strip count from the current
     # FindMatches (a Ctrl-F recollect, not a search): rebuild the parallel
@@ -2127,6 +1748,7 @@ oo::class create ::questlog::ui::Viewer {
         # every one. A term repeated in the query is counted once.
         set per_term [list]
         set seen_terms [dict create]
+        set skip [my find_chrome_tags]
         foreach term $terms {
             if {$term eq ""} continue
             if {[dict exists $seen_terms $term]} continue
@@ -2145,13 +1767,13 @@ oo::class create ::questlog::ui::Viewer {
                 if {$m eq ""} break
                 if {$len <= 0} { set len 1 }
                 set start "$m + ${len}c"
-                # Skip stub-line, fold-glyph and model-chip hits, as in
-                # collect_matches: the chip's words ("Opus", "Sonnet", version
-                # digits) are chrome, not transcript, so a search for a family
-                # word or version number must never light every chip.
-                set mtags [$Text tag names $m]
-                if {"stub" in $mtags || "foldglyph" in $mtags \
-                        || "modelchip" in $mtags} continue
+                # Skip chrome hits, the same list collect_matches skips
+                # (find_chrome_tags): stub words, the fold glyph, the chip.
+                set chrome 0
+                foreach tg [$Text tag names $m] {
+                    if {$tg in $skip} { set chrome 1; break }
+                }
+                if {$chrome} continue
                 $Text tag add find $m "$m + ${len}c"
                 lappend positions $m
             }
