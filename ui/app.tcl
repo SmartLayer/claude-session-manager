@@ -990,8 +990,8 @@ proc ::questlog::ui::app::do_move_batch {paths dst_cwd} {
     }
 }
 
-# Move one session into dst_cwd and relocate it in the list. A session
-# already in the destination's encoded folder is a silent no-op - the only
+# Move one session into dst_cwd and relocate it in the list. A session whose
+# folder cwd is already dst_cwd is a silent no-op - the only
 # "succeed without effect" path. A filesystem failure throws (the error
 # reaches do_move_batch).
 proc ::questlog::ui::app::move_one {src_path dst_cwd} {
@@ -1004,13 +1004,18 @@ proc ::questlog::ui::app::move_one {src_path dst_cwd} {
     if {[$SessionList is_running [file rootname [file tail $src_path]]]} {
         error "session is live; close it before moving"
     }
-    set src_basename [file tail [file dirname $src_path]]
-    if {![catch {::questlog::path::encode_cwd $dst_cwd} dst_basename]
-        && $dst_basename eq $src_basename} {
+    set src_cwd [::questlog::path::canon_dir [$SessionList sget $src_path folder_cwd]]
+    if {$src_cwd ne "" && $src_cwd eq [::questlog::path::canon_dir $dst_cwd]} {
         return
     }
-    set new_path [::questlog::path::move_session $src_path $dst_cwd]
     set new_folder [::questlog::path::encode_cwd $dst_cwd]
+    if {$new_folder eq [file tail [file dirname $src_path]]} {
+        # encode_cwd is lossy, so a different dst_cwd can share the session's
+        # on-disk dir: nothing to rename, relocate_card's re-stamp is the move.
+        set new_path $src_path
+    } else {
+        set new_path [::questlog::path::move_session $src_path $dst_cwd]
+    }
     $SessionList relocate_card $src_path $new_path $new_folder $dst_cwd
     # When the open session is the one moved, follow it in the viewer too, so its
     # ⋯ verbs act on the new location instead of the vanished old path (Move would

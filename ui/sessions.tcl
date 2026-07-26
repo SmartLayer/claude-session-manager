@@ -2136,8 +2136,8 @@ oo::class create ::questlog::ui::SessionList {
 
     # The folder heading's right-click menu. Kept small and folder-shaped (a
     # bounds action and a reveal), not the session action set, which is built for
-    # a session target. Reveal opens the project's real working directory; a
-    # folder whose directory is gone resolves to "" and the entry greys out.
+    # a session target. Both actions need the project's real working directory;
+    # a folder whose directory is gone resolves to "" and both entries grey out.
     method build_folder_menu {} {
         set FMenu $Top.fmenu
         menu $FMenu -tearoff 0
@@ -2150,7 +2150,7 @@ oo::class create ::questlog::ui::SessionList {
         $FMenu delete 0 end
         $FMenu add command -label "Search within this folder" \
             -command [list [self] folder_bound $folder] \
-            -state [expr {$OnFolderBound eq "" ? "disabled" : "normal"}]
+            -state [expr {$OnFolderBound eq "" || $cwd eq "" ? "disabled" : "normal"}]
         $FMenu add command -label "Reveal folder" \
             -command [list [self] folder_reveal $folder] \
             -state [expr {$cwd eq "" ? "disabled" : "normal"}]
@@ -3100,9 +3100,17 @@ oo::class create ::questlog::ui::SessionList {
         # before the redraw: this one write is what lets the glyph follow a
         # toggle without a re-scan.
         my sset $path bookmarked [file executable $path]
-        $Text configure -state normal
-        my redraw_header $path
-        $Text configure -state disabled
+        # The bit is also the "bookmarked only" filter's attribute, so re-derive
+        # this one row's hidden flag: a row the filter no longer admits leaves
+        # through the debounced rebuild now, not at the next poll.
+        my sflagset $path hidden [expr {![my attr_admits [my sid $path]]}]
+        if {[my sflag $path hidden]} {
+            my schedule_view_rebuild
+        } elseif {[my sflag $path rendered]} {
+            $Text configure -state normal
+            my redraw_header $path
+            $Text configure -state disabled
+        }
     }
 
     method all_session_paths {} {

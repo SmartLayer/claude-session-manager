@@ -226,6 +226,41 @@ check "the pin followed to the moved node" \
     [dict exists [set ${NS}::Pinned] [$SL sid $qq_new]] 1
 check "audit clean after a pinned move" [$SL audit] {}
 
+# --- Two dirs whose encoded basenames collide (encode_cwd folds every
+#     non-alphanumeric to '-', so work/coll-x and work/coll/x share one encoded
+#     name and one on-disk folder). The old no-op check compared encoded
+#     basenames and silently swallowed a real move between them; the move must
+#     relocate - same file path, folder_cwd re-stamped to the destination -
+#     while a move to the cwd the session already carries stays a no-op.
+set CWDE [file join $SAND work coll-x]
+set CWDF [file join $SAND work coll x]
+::questlog::path::_real_file mkdir $CWDE
+::questlog::path::_real_file mkdir $CWDF
+set FE [::questlog::path::encode_cwd $CWDE]
+check "the two cwds collide in one encoded basename" \
+    [::questlog::path::encode_cwd $CWDF] $FE
+set rr [file join $PROOT $FE rrrr.jsonl]
+write_session $rr {r-one r-two} "2026-05-19T06:00"
+file mtime $rr [clock scan "2026-05-19 06:01:00" -gmt 1]
+$SL on_scan_row [scanpath $rr]
+update
+# The resolver cannot pick between colliding candidates; the premise is a
+# session belonging to coll-x, so stamp its residence outright.
+$SL sset $rr folder_cwd $CWDE
+::questlog::ui::app::move_one $rr $CWDF
+update
+check "colliding move is not swallowed: folder_cwd re-stamped" \
+    [$SL sget $rr folder_cwd] $CWDF
+check "colliding move keeps the file in the shared folder" [file isfile $rr] 1
+check "colliding move keeps one node" [nodes_for $rr] 1
+check "audit clean after the colliding move" [$SL audit] {}
+# Same cwd again: now a true no-op, judged on the cwd rather than the basename.
+set ::relocs 0
+oo::objdefine $SL method relocate_card {args} { incr ::relocs; next {*}$args }
+::questlog::ui::app::move_one $rr $CWDF
+update
+check "same-cwd move in the colliding folder is a no-op" $::relocs 0
+
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]
 exit $fails
