@@ -3,13 +3,13 @@ package require Tk
 package require logman
 package require streamdoc
 package require tkdown
-package provide sessionview 0.1
+package provide showman 0.1
 
-# sessionview - a Claude Code session transcript as a foldable, searchable
+# showman - a Claude Code session transcript as a foldable, searchable
 # conversation view: the display base class questlog's own viewer and a live
 # chat both subclass.
 #
-# ::sessionview::SessionView subclasses ::streamdoc::StreamDoc (one region per
+# ::showman::Showman subclasses ::streamdoc::StreamDoc (one region per
 # turn; the base class owns the marks and both elide layers) and adds the
 # transcript skin over it:
 #   - record rendering (render_records / append_records): parsed jsonl records
@@ -30,7 +30,7 @@ package provide sessionview 0.1
 #     append_records drops finished records (tool calls, results) into the
 #     open turn between streamed messages.
 #
-# Display-only: SessionView knows nothing about claude, processes, files or
+# Display-only: Showman knows nothing about claude, processes, files or
 # the API. A subclass owns where records come from and what happens around
 # the view.
 #
@@ -43,12 +43,12 @@ package provide sessionview 0.1
 #   -idle_gap min   minutes of silence that draw an idle-gap divider.
 # plus streamdoc's own: -font -glyphs -autofollow.
 
-namespace eval ::sessionview {}
+namespace eval ::showman {}
 
 # The derived named fonts the default look reads: body faces from TkTextFont,
 # mono faces from TkFixedFont. Created once per interp; a host that passes
 # -fonts and -font uses its own and these still exist harmlessly.
-proc ::sessionview::ensure_fonts {} {
+proc ::showman::ensure_fonts {} {
     if {"SVBody" in [font names]} return
     font create SVBody           {*}[font actual TkTextFont]
     font create SVBodyBold       {*}[font actual TkTextFont] -weight bold
@@ -58,7 +58,7 @@ proc ::sessionview::ensure_fonts {} {
     font create SVMonoBold       {*}[font actual TkFixedFont] -weight bold
 }
 
-oo::class create ::sessionview::SessionView {
+oo::class create ::showman::Showman {
     superclass ::streamdoc::StreamDoc
 
     # Top and Text are the streamdoc base class's (same object namespace);
@@ -93,7 +93,7 @@ oo::class create ::sessionview::SessionView {
     # overlay) skips this and ends its build with `my reset` instead - the
     # streamdoc pattern one level up.
     method setup {parent} {
-        ::sessionview::ensure_fonts
+        ::showman::ensure_fonts
         next $parent
         my build_tags
         my build_find

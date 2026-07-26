@@ -1,11 +1,11 @@
 package require Tcl 9
 package require Tk
 package require logman
-package require sessionview
+package require showman
 package provide conversation 0.1
 
 # conversation - a Claude conversation as one composed surface: the
-# sessionview transcript above, a prompt strip for the two prompts a
+# showman transcript above, a prompt strip for the two prompts a
 # session raises mid-turn (a tool-use permission, a question), and an
 # input strip for the operator's typed line below. Driver-agnostic on
 # purpose: this module spawns nothing, reads nothing and speaks no
@@ -81,7 +81,7 @@ package provide conversation 0.1
 #           answering (the driver withdrew the prompt).
 #   prompts                                    the parked req_ids.
 #
-# OTHER SURFACE. `viewer` is the composed SessionView, for a host that
+# OTHER SURFACE. `viewer` is the composed Showman, for a host that
 # binds or themes it; `input_show 0|1` is the view-only toggle (a
 # transcript being read, not continued); `input_enable 0|1` greys the
 # strip without hiding it; `focus_input` puts the caret in the entry.
@@ -122,14 +122,14 @@ package provide conversation 0.1
 # CONSTRUCTOR {parent ?options?}. parent is a frame the host owns and
 # packs; the surface grids into it. Options: -on_send (the seam; ""
 # renders view-only in effect), -input 0|1 (start with the input strip
-# hidden), -view {opts} (passed to the SessionView constructor:
+# hidden), -view {opts} (passed to the Showman constructor:
 # -palette, -fonts, -idle_gap and streamdoc's own).
 
 namespace eval ::conversation {}
 
 oo::class create ::conversation::Conversation {
     variable Top          ;# the host frame the surface grids into
-    variable V            ;# the composed ::sessionview::SessionView
+    variable V            ;# the composed ::showman::Showman
     variable OnSend       ;# the seam: a command prefix, "" for none
     variable Entry        ;# the input strip's entry
     variable SendBtn      ;# the input strip's Send button
@@ -156,7 +156,7 @@ oo::class create ::conversation::Conversation {
         set Prompts [dict create]
         set PromptSeq 0
         ttk::frame $parent.view
-        set V [::sessionview::SessionView new $parent.view {*}$vopts]
+        set V [::showman::Showman new $parent.view {*}$vopts]
         set PromptFrame [ttk::frame $parent.prompts]
         set InputFrame  [ttk::frame $parent.input]
         set Entry   [ttk::entry $InputFrame.e]

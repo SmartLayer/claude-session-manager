@@ -1,16 +1,16 @@
 #!/usr/bin/env wish9.0
-# The sessionview module: the display base class over streamdoc that renders
+# The showman module: the display base class over streamdoc that renders
 # a Claude Code transcript as foldable, searchable turns, plus the live path
 # (a growing turn streamed into in place) questlog's viewer never had.
 #
-# Drives a bare ::sessionview::SessionView over hand-written fixture records
+# Drives a bare ::showman::Showman over hand-written fixture records
 # (no session file, no app chrome): turn rendering, tool-detail fold and
 # unfold, find reaching into a folded region and revealing the hit, and the
 # live turn - open, streamed in-place writes, the working marker, finished
 # records appended mid-turn, close.
 #
 # Runs under wish (it builds a Tk view); run-audit routes it to wish9.0 on
-# the private Xvfb. Standalone: xvfb-run -a wish9.0 test/test-sessionview.tcl
+# the private Xvfb. Standalone: xvfb-run -a wish9.0 test/test-showman.tcl
 
 package require Tcl 9
 package require Tk
@@ -18,7 +18,7 @@ package require Tk
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
 ::tcl::tm::path add [file join $ROOT modules]
 ::tcl::tm::path add [file join $ROOT vendor]
-package require sessionview
+package require showman
 
 set fails 0
 proc check {name got want} {
@@ -53,7 +53,7 @@ foreach line $LINES {
 
 # ---- build the view and render the fixture ----------------------------------
 ttk::frame .sv
-set V [::sessionview::SessionView new .sv]
+set V [::showman::Showman new .sv]
 pack .sv -fill both -expand 1
 $V render_records $RECS
 update idletasks
