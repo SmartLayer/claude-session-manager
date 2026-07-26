@@ -401,6 +401,7 @@ proc ::questlog::ui::app::run_tick {} {
     variable SessionList
     variable RunTimer
     variable Scan
+    variable PrevSnapshot
     set running [::questlog::ui::live::running_uuids]
     # Poll the projects tree for arrivals the live registry never reports,
     # BEFORE reconcile. The poll publishes through on_scan_row, whose tail
@@ -410,6 +411,19 @@ proc ::questlog::ui::app::run_tick {} {
     # phantom drop in the same tick.
     $Scan poll_arrivals
     $SessionList reconcile_running $running
+    # A live session appends in place, moving its file mtime but not its
+    # folder's, so poll_arrivals's directory gate never re-reads it: force the
+    # bounded-tail re-scan of each modelled running path whose file moved.
+    # After reconcile, so freshen_attached reads the fresh running set.
+    # Browse-only like reconcile's import (on_scan_row bails under criteria).
+    if {![::questlog::ui::any_criteria $PrevSnapshot]} {
+        dict for {uuid path} $running {
+            if {![$SessionList has_session $path]} continue
+            if {[catch {file mtime $path} m]} continue
+            if {$m eq [$SessionList stored_mtime $path]} continue
+            $Scan scan_path $path
+        }
+    }
     # The same tick refreshes the membership the active filters claim, so a session
     # that starts running outside the search's window is counted (and named) within
     # one poll of starting, rather than staying silently absent.

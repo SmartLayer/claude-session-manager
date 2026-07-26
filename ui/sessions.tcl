@@ -786,10 +786,9 @@ oo::class create ::questlog::ui::SessionList {
     # payload into the row shape ::questlog::scan reads. These are exactly the
     # fields row_subtree_match (folder, folder_cwd, cwd_hint) and row_in_bounds
     # (mtime, nturns) consult; a caller with a modelled path asks the store,
-    # never the scanner. mtime and nturns are set-at-scan and go stale for a
-    # session still being written, but such a session is running and is retained
-    # by that fact before its recency is ever weighed, so the frozen copy
-    # decides nothing a fresh read would decide differently.
+    # never the scanner. mtime and nturns are set-at-scan; for a session still
+    # being written the poll's live refresh (run_tick) keeps them fresh, and
+    # the quit tick re-reads before recency is weighed (reconcile_running).
     method payload_bounds_row {path} {
         return [dict create \
             folder     [my sget $path folder] \
@@ -805,18 +804,32 @@ oo::class create ::questlog::ui::SessionList {
     # re-enumeration - a changed transcript may have grown or lost subagents.
     # Cost fields do not ride a scan row, so the freshened payload is costless
     # and the app's cost gate re-prices it - correct for a file whose spend
-    # just changed. Selection, pin and anchor survive untouched: the row never
-    # leaves the model.
+    # just changed, except while the session runs (the carry below). Selection,
+    # pin and anchor survive untouched: the row never leaves the model.
     method freshen_attached {path row} {
         if {[dict getdef $row mtime 0] == [my sget $path mtime 0]} return
         set sid [my sid $path]
         set folder [my sget $path folder]
+        set payload [my row_payload $path $row]
+        # A running session freshens on every poll tick, and a costless payload
+        # would queue a whole-transcript re-parse through the app's cost gate
+        # each time: while it runs the priced fields carry over, lagged, and
+        # the quit tick (reconcile_running) settles the one re-price.
+        if {![dict exists $row cost_usd]
+            && [my is_running [file rootname [file tail $path]]]} {
+            foreach k {cost turns duration_secs human_secs model context_pct
+                       own_cost own_turns own_duration_secs own_human_secs
+                       own_model own_context_pct input_tokens output_tokens
+                       cache_write_tokens cache_read_tokens model_breakdown} {
+                dict set payload $k [my sget $path $k]
+            }
+        }
         $Text configure -state normal
         my anchor_save
         my detach_session_children $path
         my node_set $sid expanded 0
         my drop_child_nodes $sid
-        dict set Nodes $sid payload [my row_payload $path $row]
+        dict set Nodes $sid payload $payload
         my redraw_folder_heading $folder
         my node_set $sid hidden [expr {![my attr_admits $sid]}]
         if {[my sflag $path hidden]} {
@@ -2917,6 +2930,26 @@ oo::class create ::questlog::ui::SessionList {
     # missed tick self-corrects on the next.
     method reconcile_running {running} {
         set RunningSet $running
+        # A uuid in PrevRunning but not here quit this tick. Its modelled mtime
+        # froze at the last live refresh and the retention pass below reads that
+        # cached value, so under a short window the row would drop the moment
+        # the session stops: freshen it from disk first, letting the quit
+        # instant's mtime decide. The freshen resets the priced fields (no
+        # longer running, freshen_attached carries nothing) and the app's cost
+        # gate re-prices; for an unchanged file the freshen no-ops and the
+        # re-price is asked for directly, so cost catches up on completion
+        # either way. Before the state/anchor bracket below: the freshen owns
+        # its own.
+        if {![::questlog::ui::any_criteria $Snapshot]} {
+            dict for {uuid path} $PrevRunning {
+                if {[dict exists $running $uuid]} continue
+                if {![my has_session $path]} continue
+                if {![catch {file mtime $path} m] && $m != [my sget $path mtime 0]} {
+                    {*}$OnScanPath $path
+                }
+                if {[my sget $path cost] ne ""} { {*}$OnSubagentCost $path }
+            }
+        }
         # The subtree bound is hard, even for a running session: a live session in
         # another project must not surface under a folder bound. The recency bound
         # is the only thing a running session bypasses, not the folder bound.
