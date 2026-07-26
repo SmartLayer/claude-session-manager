@@ -1,6 +1,6 @@
 #!/usr/bin/env wish9.0
 # The conversation module: the driver-agnostic surface composing the
-# sessionview transcript, the prompt strip and the input strip around the
+# showman transcript, the prompt strip and the input strip around the
 # one -on_send seam.
 #
 # Part A drives the render surface directly with the record-grade shapes
