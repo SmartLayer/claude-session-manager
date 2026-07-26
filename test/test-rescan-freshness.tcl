@@ -116,10 +116,13 @@ check "audit clean after the attached freshen" [$SL audit] {}
 proc slvar {name} { global SL; set ns [info object namespace $SL]; return [set ${ns}::$name] }
 $SL selection_set $Ap
 set NS [info object namespace $SL]
-namespace eval $NS { dict set Pinned $::Ap 1 }
+# Selection/pin/anchor are keyed by the stable node id (sid), which a freshen
+# keeps (it replaces the row's payload in place), so pin and assert by sid.
+set Asid [$SL sid $Ap]
+namespace eval $NS [list dict set Pinned $Asid 1]
 check "A selected before the freshen" [$SL is_selected $Ap] 1
-check "A pinned before the freshen" [dict exists [slvar Pinned] $Ap] 1
-check "A is the anchor before the freshen" [slvar SelectAnchor] $Ap
+check "A pinned before the freshen" [dict exists [slvar Pinned] $Asid] 1
+check "A is the anchor before the freshen" [slvar SelectAnchor] $Asid
 # The trigger is a periodic rescan on the unchanged snapshot - no bounds switch,
 # so no clear - and A is already attached, so its changed file streams straight
 # into freshen_attached.
@@ -128,8 +131,8 @@ file mtime $Ap [expr {$NOW - 2000}]
 rescan [dict create since 30d]
 check "the freshen landed the new turn count" [$SL sget $Ap nturns] 4
 check "A stays selected across the freshen" [$SL is_selected $Ap] 1
-check "A stays pinned across the freshen" [dict exists [slvar Pinned] $Ap] 1
-check "A stays the anchor across the freshen" [slvar SelectAnchor] $Ap
+check "A stays pinned across the freshen" [dict exists [slvar Pinned] $Asid] 1
+check "A stays the anchor across the freshen" [slvar SelectAnchor] $Asid
 check "audit clean after the selected freshen" [$SL audit] {}
 
 # --- 3. Active criteria wipe the store and the scan stream attaches nothing;

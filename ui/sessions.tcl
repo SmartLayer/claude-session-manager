@@ -116,7 +116,7 @@ oo::class create ::questlog::ui::SessionList {
     variable FilterNote       ;# the status line's filter clause, "" when no filter or no membership
     variable CutMembers       ;# the members with no loaded row, as {path ?cwd? resolved} dicts
     variable CutReason        ;# the criterion that cut them: subtree|search|since|min_turns|""
-    variable Pinned           ;# dict path -> 1: sessions the reader pulled in past the search
+    variable Pinned           ;# dict sid -> 1: sessions the reader pulled in past the search
     variable ViewRebuildTimer ;# after-id of the debounced hidden-aware rebuild, or ""
     variable Query            ;# {terms <list> nocase 0|1} for hit highlighting
     variable HitTags
@@ -125,9 +125,9 @@ oo::class create ::questlog::ui::SessionList {
     variable FolderNode       ;# folder name -> node id
     variable PathNode         ;# session path OR subagent path -> node id
     variable TagNode          ;# folder node.tag -> node id, for drop hit-testing
-    variable SelectedSet      ;# ordered set (dict path->1) of selected sessions
-    variable SelectAnchor     ;# path a Shift-range extends from, or ""
-    variable SelectedFolder   ;# folder name whose heading is highlighted, or ""
+    variable SelectedSet      ;# ordered set (dict sid->1) of selected sessions
+    variable SelectAnchor     ;# sid a Shift-range extends from, or ""
+    variable SelectedFolder   ;# fid whose heading is highlighted, or ""
     variable FMenu            ;# the folder-heading right-click menu
     variable Menu
     variable MenuPath
@@ -271,6 +271,13 @@ oo::class create ::questlog::ui::SessionList {
     #       shows here as a node absent from its own reverse index.
     #   (b) no node's children list names a child twice, the fault that paints a
     #       row twice when sort_siblings maps a repeated key back through sid.
+    #   (c) no folder node carries an empty label while it has children, the fault
+    #       a hand-built destination folder (label "") reintroduces as a "(N)"
+    #       heading over nothing.
+    #   (d) the mutable view-state sets (selection, pin, anchor, folder highlight)
+    #       hold node ids that exist as nodes, never a path or basename a move
+    #       mutates: a regression to path-keying lodges a string that is no node id
+    #       and trips here.
     method audit {} {
         set probs [list]
         # (a) reverse indices are a bijection with the keyed nodes.
@@ -316,6 +323,28 @@ oo::class create ::questlog::ui::SessionList {
                 }
                 dict set seen $c 1
             }
+        }
+        # (c) a folder heading with children must carry a non-empty label.
+        foreach id [my all_node_ids] {
+            if {[my node_field $id kind] eq "folder" \
+                && [my node_pget $id label ""] eq "" \
+                && [llength [my node_field $id children]] > 0} {
+                lappend probs "folder [my node_field $id key] has children but empty label"
+            }
+        }
+        # (d) the mutable view-state sets are node-keyed: every id they hold is a
+        # live node, so a move (which changes a path, not an id) strands none.
+        foreach id [dict keys $SelectedSet] {
+            if {![dict exists $Nodes $id]} { lappend probs "SelectedSet holds non-node $id" }
+        }
+        foreach id [dict keys $Pinned] {
+            if {![dict exists $Nodes $id]} { lappend probs "Pinned holds non-node $id" }
+        }
+        if {$SelectAnchor ne "" && ![dict exists $Nodes $SelectAnchor]} {
+            lappend probs "SelectAnchor is non-node $SelectAnchor"
+        }
+        if {$SelectedFolder ne "" && ![dict exists $Nodes $SelectedFolder]} {
+            lappend probs "SelectedFolder is non-node $SelectedFolder"
         }
         return $probs
     }
@@ -409,6 +438,7 @@ oo::class create ::questlog::ui::SessionList {
                 set tag [my node_field $id tag]
                 if {$tag ne ""} { dict unset TagNode $tag }
                 dict unset FolderNode [my node_field $id key]
+                if {$SelectedFolder eq $id} { set SelectedFolder "" }
             }
             session { my forget_session_domain $id }
             subagent { dict unset PathNode [my node_field $id key] }
@@ -1983,9 +2013,13 @@ oo::class create ::questlog::ui::SessionList {
         }
     }
 
-    method ensure_folder {folder} {
+    # cwd is the folder's real working directory when the caller already holds it
+    # (a move into an as-yet-unscanned folder, where ResolveFolder would walk the
+    # filesystem and find nothing); left "" the resolver answers, as browse does.
+    method ensure_folder {folder {cwd ""}} {
         if {[my has_folder $folder]} return
-        set label [::questlog::path::display_label [{*}$ResolveFolder $folder] $folder]
+        if {$cwd eq ""} { set cwd [{*}$ResolveFolder $folder] }
+        set label [::questlog::path::display_label $cwd $folder]
         # Browsing opens folders collapsed (an overview of projects); a search
         # opens them expanded so the matches under each folder are visible. A
         # collapsed folder draws only its heading - its sessions live in the
@@ -2035,12 +2069,14 @@ oo::class create ::questlog::ui::SessionList {
     # ---- folder click, selection and menu ----------------------------
     #
     # A folder heading is selectable like a session row, but its state lives
-    # apart from the path-keyed session selection: a folder is name-keyed, so it
-    # cannot join SelectedSet. There is one highlighted folder at a time, held in
-    # SelectedFolder, and it and the session selection are mutually exclusive (one
-    # selection model). The highlight reuses the session `selected` tag over the
-    # heading line; re-lays reapply it from membership (on_row_rendered and
-    # redraw_folder_heading above).
+    # apart from the session selection: a folder joins no SelectedSet of its own.
+    # There is one highlighted folder at a time, held in SelectedFolder by node id
+    # (a fid, like SelectedSet holds sids), and it and the session selection are
+    # mutually exclusive (one selection model). Keying by the stable fid dissolves
+    # the stale-highlight roach: a forgotten folder's id is purged on delete, so a
+    # later folder reusing the name never inherits its highlight. The highlight
+    # reuses the session `selected` tag over the heading line; re-lays reapply it
+    # from membership (on_row_rendered and redraw_folder_heading above).
 
     method on_folder_click {folder X Y} {
         if {[my click_on_tag $X $Y foldchevron]} {
@@ -2050,7 +2086,9 @@ oo::class create ::questlog::ui::SessionList {
         my folder_select $folder
     }
 
-    method is_folder_selected {folder} { return [expr {$SelectedFolder eq $folder}] }
+    method is_folder_selected {folder} {
+        return [expr {[my has_folder $folder] && $SelectedFolder eq [my fid $folder]}]
+    }
 
     method folder_select {folder} {
         if {![my has_folder $folder]} return
@@ -2059,8 +2097,8 @@ oo::class create ::questlog::ui::SessionList {
         # before this folder claims it.
         my set_selection [list]
         set SelectAnchor ""
-        set SelectedFolder $folder
         set fid [my fid $folder]
+        set SelectedFolder $fid
         if {[my node_field $fid rendered]} {
             set fm [my node_field $fid start]
             $Text tag add selected $fm "$fm lineend"
@@ -2069,12 +2107,10 @@ oo::class create ::questlog::ui::SessionList {
 
     method clear_folder_selection {} {
         if {$SelectedFolder eq ""} return
-        if {[my has_folder $SelectedFolder]} {
-            set fid [my fid $SelectedFolder]
-            if {[my node_field $fid rendered]} {
-                set fm [my node_field $fid start]
-                catch {$Text tag remove selected $fm "$fm lineend"}
-            }
+        if {[dict exists $Nodes $SelectedFolder] \
+            && [my node_field $SelectedFolder rendered]} {
+            set fm [my node_field $SelectedFolder start]
+            catch {$Text tag remove selected $fm "$fm lineend"}
         }
         set SelectedFolder ""
     }
@@ -2470,14 +2506,18 @@ oo::class create ::questlog::ui::SessionList {
 
     # ---- selection / open --------------------------------------------
     #
-    # The selection is a set of session paths (SelectedSet, a dict path->1 in
-    # insertion order) with a SelectAnchor the Shift-range extends from. A plain
-    # click selects one and opens it; Control toggles one (across folders);
+    # The selection is a set of session node ids (SelectedSet, a dict sid->1 in
+    # insertion order) with a SelectAnchor sid the Shift-range extends from. A
+    # plain click selects one and opens it; Control toggles one (across folders);
     # Shift selects a contiguous range within one folder. Membership is keyed by
-    # path, so it survives the frequent re-renders and follows a moved session.
+    # the stable node id, so it survives the frequent re-renders and follows a
+    # moved session for free (a move re-parents the node, its id unchanged); the
+    # readers that hand a path onward resolve sid -> key at the boundary.
 
-    method is_selected {path}   { return [dict exists $SelectedSet $path] }
-    method selection_paths {}   { return [dict keys $SelectedSet] }
+    method is_selected {path} {
+        return [expr {[my has_session $path] && [dict exists $SelectedSet [my sid $path]]}]
+    }
+    method selection_paths {}   { return [lmap id [dict keys $SelectedSet] { my node_field $id key }] }
     method selection_count {}   { return [dict size $SelectedSet] }
 
     # Add or remove the `selected` highlight on one rendered session, and match
@@ -2503,12 +2543,12 @@ oo::class create ::questlog::ui::SessionList {
         # gesture that sets the session selection drops the folder highlight.
         my clear_folder_selection
         set new [dict create]
-        foreach p $paths { dict set new $p 1 }
-        foreach p [dict keys $SelectedSet] {
-            if {![dict exists $new $p]} { my apply_selection_tag $p 0 }
+        foreach p $paths { dict set new [my sid $p] 1 }
+        foreach id [dict keys $SelectedSet] {
+            if {![dict exists $new $id]} { my apply_selection_tag [my node_field $id key] 0 }
         }
-        foreach p [dict keys $new] {
-            if {![dict exists $SelectedSet $p]} { my apply_selection_tag $p 1 }
+        foreach id [dict keys $new] {
+            if {![dict exists $SelectedSet $id]} { my apply_selection_tag [my node_field $id key] 1 }
         }
         set SelectedSet $new
     }
@@ -2516,7 +2556,7 @@ oo::class create ::questlog::ui::SessionList {
     # Plain click: the selection is exactly this one, and it anchors a range.
     method selection_set {path} {
         my set_selection [list $path]
-        set SelectAnchor $path
+        set SelectAnchor [my sid $path]
     }
 
     # Control click: add or drop one session, across folders; re-anchor to it.
@@ -2528,7 +2568,7 @@ oo::class create ::questlog::ui::SessionList {
         } else {
             my set_selection [concat [my selection_paths] [list $path]]
         }
-        set SelectAnchor $path
+        set SelectAnchor [my sid $path]
     }
 
     # Shift click: the contiguous run between the anchor and this row, in the
@@ -2537,17 +2577,18 @@ oo::class create ::questlog::ui::SessionList {
     # is not a meaningful selection). The anchor stays put so dragging the
     # endpoint grows or shrinks the run from the same origin.
     method selection_range {path} {
-        if {$SelectAnchor eq "" || ![my has_session $SelectAnchor]} {
+        if {$SelectAnchor eq "" || ![dict exists $Nodes $SelectAnchor]} {
             my selection_set $path
             return
         }
-        set folder [my sget $SelectAnchor folder]
+        set anchor_path [my node_field $SelectAnchor key]
+        set folder [my node_pget $SelectAnchor folder]
         if {![my has_session $path] || [my sget $path folder] ne $folder} {
             my selection_set $path
             return
         }
         set ordered [my folder_visible_paths $folder]
-        set ia [lsearch -exact $ordered $SelectAnchor]
+        set ia [lsearch -exact $ordered $anchor_path]
         set ib [lsearch -exact $ordered $path]
         if {$ia < 0 || $ib < 0} { my selection_set $path; return }
         if {$ia > $ib} { lassign [list $ib $ia] ia ib }
@@ -2946,7 +2987,7 @@ oo::class create ::questlog::ui::SessionList {
                 # A session the reader pulled in through the cut banner stays,
                 # whatever the bounds say: they named it and asked for it, and
                 # dropping it on the next tick would answer them by taking it away.
-                set retained [expr {[dict exists $Pinned $path] || ($in_subtree \
+                set retained [expr {[dict exists $Pinned [my sid $path]] || ($in_subtree \
                     && ([my row_matches_snapshot $row] || $is_running))}]
             }
             if {!$retained} { my forget_session $path; continue }
@@ -3060,7 +3101,9 @@ oo::class create ::questlog::ui::SessionList {
 
     # A session leaving the store: drop its path index, its selection
     # membership, and the indices of any enumerated subagents the
-    # rendered-children subtree did not already cover. The status line's grand
+    # rendered-children subtree did not already cover. Unlike a move (which
+    # re-parents the node and keeps its id), a forget deletes the node, so the
+    # sid-keyed view-state sets are purged here by id. The status line's grand
     # total is derived from the surviving nodes, so nothing to subtract here.
     method forget_session_domain {id} {
         set path [my node_field $id key]
@@ -3071,9 +3114,9 @@ oo::class create ::questlog::ui::SessionList {
             }
         }
         dict unset PathNode $path
-        dict unset SelectedSet $path
-        dict unset Pinned $path
-        if {$SelectAnchor eq $path} { set SelectAnchor "" }
+        dict unset SelectedSet $id
+        dict unset Pinned $id
+        if {$SelectAnchor eq $id} { set SelectAnchor "" }
     }
 
     method forget_folder {folder} {
@@ -3107,19 +3150,31 @@ oo::class create ::questlog::ui::SessionList {
         my node_pset $sid mtime [file mtime $new_path]
         my node_pset $sid size [file size $new_path]
         my node_pset $sid folder_cwd $new_cwd
-        # Create the destination folder in the store when new (no draw; the
-        # move's rebuild draws it).
-        if {![my has_folder $new_folder]} {
-            set new_fid [my node_new folder "" $new_folder [dict create label ""]]
-            my node_set $new_fid expanded [expr {[::questlog::ui::any_criteria $Snapshot] ? 1 : 0}]
-            dict set FolderNode $new_folder $new_fid
-            lappend Roots $new_fid
+        # The subagent sidecar dir (<uuid>/) moved with the jsonl
+        # (path::move_session), so each enumerated child now lives under the new
+        # folder: re-key its PathNode entry, node key, folder and parent_path so
+        # apply_child_cost's child->parent fold-up still resolves after the move.
+        set base [file rootname $new_path]
+        set new_cps [list]
+        foreach old_cp [my node_pget $sid all_child_paths] {
+            set new_cp [file join $base subagents [file tail $old_cp]]
+            set cid [my session_node $old_cp]
+            if {$cid ne ""} {
+                dict unset PathNode $old_cp
+                dict set PathNode $new_cp $cid
+                my node_set $cid key $new_cp
+                my node_pset $cid parent_path $new_path
+                my node_pset $cid folder $new_folder
+            }
+            lappend new_cps $new_cp
         }
-        if {[dict exists $SelectedSet $old_path]} {
-            dict unset SelectedSet $old_path
-            dict set SelectedSet $new_path 1
-        }
-        if {$SelectAnchor eq $old_path} { set SelectAnchor $new_path }
+        my node_pset $sid all_child_paths $new_cps
+        # Create the destination folder through the single creator, which labels it
+        # from the cwd move_one holds (an empty label "" is what left a "(N)"
+        # heading over nothing). No draw needed; the move's rebuild re-lays it.
+        my ensure_folder $new_folder $new_cwd
+        # Selection, pin and anchor key by the stable sid, which the move keeps, so
+        # a re-parent carries them for free - nothing to re-key here.
         # The move's rebuild re-lays both headings from the derived totals; an
         # emptied source folder is dropped whole (the rule forget_session applies).
         my move $sid [my fid $new_folder]
@@ -3500,7 +3555,7 @@ oo::class create ::questlog::ui::SessionList {
             $Text configure -state normal
             if {![my has_session $path]} { my model_add_session $path $row }
             $Text configure -state disabled
-            dict set Pinned $path 1
+            dict set Pinned [my sid $path] 1
             my open_folder_node [my sget $path folder]
             set added 1
         }

@@ -154,7 +154,7 @@ $SL selection_set $a01
 $SL selection_range $b02
 check "cross-folder shift re-anchors to the target alone" [sel] [list $b02]
 
-# ---- selection survives a move (relocate_card re-keys the set) -----------
+# ---- selection survives a move (the set is sid-keyed; the move keeps the id) --
 $SL selection_set $a02
 set moved [file join $DIRB moved.jsonl]
 # The real move renames the file before relocate_card re-keys the store, so the

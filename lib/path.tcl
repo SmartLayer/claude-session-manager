@@ -165,7 +165,21 @@ proc ::questlog::path::move_session {src_path dst_cwd} {
     if {[file exists $new_path]} {
         error "destination already exists: $new_path"
     }
+    # A session's subagent transcripts live in a sidecar dir named for its uuid
+    # (<folder>/<uuid>/subagents/agent-*.jsonl). Move it alongside the jsonl in the
+    # same operation, or the chevron, child rows and their cost vanish on the next
+    # rescan and the files are orphaned in the source folder.
+    set uuid [file rootname [file tail $src_path]]
+    set src_side [file join $src_folder $uuid]
+    set dst_side [file join $dst_folder $uuid]
+    set move_side [file isdirectory $src_side]
+    if {$move_side && [file exists $dst_side]} {
+        error "destination already exists: $dst_side"
+    }
     ::questlog::path::_real_file rename -- $src_path $new_path
+    if {$move_side} {
+        ::questlog::path::_real_file rename -- $src_side $dst_side
+    }
     return $new_path
 }
 

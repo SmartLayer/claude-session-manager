@@ -166,6 +166,66 @@ check "no-op leaves the session in place" [$SL has_session $b1] 1
 check "no-op changes no count"            [ftot $FB count] $bCountBefore
 check "no-op leaves the store clean"      [$SL audit] {}
 
+# --- A session with a subagent sidecar dir: the move must carry the <uuid>/
+#     directory with the jsonl (else its children orphan on disk and vanish on
+#     rescan), re-key the child node, and keep the folded-up child cost. The
+#     destination folder is unlisted before the move, so it also exercises the
+#     single-creator label (an empty "(N)" heading is the bug this closes).
+set CWDC [file join $SAND work proj-c]
+set CWDD [file join $SAND work proj-d]
+::questlog::path::_real_file mkdir $CWDC
+::questlog::path::_real_file mkdir $CWDD
+set FC [::questlog::path::encode_cwd $CWDC]
+set FD [::questlog::path::encode_cwd $CWDD]
+set pp [file join $PROOT $FC pppp.jsonl]
+write_session $pp {p-one p-two} "2026-05-21T08:00"
+file mtime $pp [clock scan "2026-05-21 08:01:00" -gmt 1]
+set side_c [file join $PROOT $FC pppp subagents]
+::questlog::path::_real_file mkdir $side_c
+set child_old [file join $side_c agent-1.jsonl]
+write_session $child_old {s-one} "2026-05-21T08:02"
+$SL on_scan_row [scanpath $pp]
+update
+check "parent has_subagents modelled"        [$SL sget $pp has_subagents] 1
+check "child modelled at its source path"     [$SL has_session $child_old] 1
+# Give the child a cost so the fold-up has something to carry across the move.
+$SL refresh_cost $child_old [dict create cost_usd 0.75 turns 1 duration_secs 5 \
+    human_secs 2 model "claude-3-5-sonnet-20241022"]
+update
+set pcost0 [$SL sget $pp cost]
+check "child cost folded into the parent before the move" [expr {$pcost0 >= 0.75}] 1
+
+::questlog::ui::app::move_one $pp $CWDD
+update
+set pp_new    [file join $PROOT $FD pppp.jsonl]
+set child_new [file join $PROOT $FD pppp subagents agent-1.jsonl]
+check "the subagent sidecar dir followed on disk"  [file isfile $child_new] 1
+check "the source sidecar dir is gone"             [file isdirectory [file join $PROOT $FC pppp]] 0
+check "the child node re-keyed to the new path"    [$SL has_session $child_new] 1
+check "the child node left the old path"           [$SL has_session $child_old] 0
+check "the folded-up child cost survived the move" \
+    [expr {abs([$SL sget $pp_new cost] - $pcost0) < 1e-6}] 1
+check "new destination folder carries a real label, not empty" \
+    [expr {[$SL node_pget [$SL fid $FD] label] ne ""}] 1
+check "audit clean after a subagent move" [$SL audit] {}
+
+# --- A pinned session survives a move: the pin is keyed by the stable sid, which
+#     the re-parent keeps, so it is not dropped on the next reconcile tick.
+set qq [file join $PROOT $FD qqqq.jsonl]
+write_session $qq {q-one} "2026-05-20T07:00"
+file mtime $qq [clock scan "2026-05-20 07:01:00" -gmt 1]
+$SL on_scan_row [scanpath $qq]
+update
+set NS [info object namespace $SL]
+namespace eval $NS [list dict set Pinned [$SL sid $qq] 1]
+::questlog::ui::app::move_one $qq $CWDC
+update
+set qq_new [file join $PROOT $FC qqqq.jsonl]
+check "pinned session followed the move" [$SL has_session $qq_new] 1
+check "the pin followed to the moved node" \
+    [dict exists [set ${NS}::Pinned] [$SL sid $qq_new]] 1
+check "audit clean after a pinned move" [$SL audit] {}
+
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]
 exit $fails
