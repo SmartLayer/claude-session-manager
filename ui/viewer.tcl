@@ -838,6 +838,18 @@ oo::class create ::questlog::ui::Viewer {
     # The reading text, so the app can move focus here when it folds the list.
     method textwidget {} { return $Text }
 
+    # The path of the session currently shown, "" when the pane is empty. The app
+    # asks this to tell whether a move it just made touched the open session.
+    method current_path {} { return $Path }
+
+    # The open session's jsonl moved on disk (a list move of the shown session):
+    # follow it so the ⋯ verbs (Move/Bookmark/Rename act on $Path) and the growth
+    # watch hit the new location. Content is unchanged, so nothing re-renders.
+    method relocate {new_path} {
+        if {$Path eq ""} return
+        set Path $new_path
+    }
+
     # Pop the platform font chooser, seeded with the body's current font. It is
     # a single shared modeless dialog, not a widget; its -command fires with the
     # chosen font appended when the reader confirms.

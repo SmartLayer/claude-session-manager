@@ -982,6 +982,8 @@ proc ::questlog::ui::app::do_move_batch {paths dst_cwd} {
 # reaches do_move_batch).
 proc ::questlog::ui::app::move_one {src_path dst_cwd} {
     variable SessionList
+    variable Viewer
+    variable ViewerPath
     # A live session must not be moved: renaming its jsonl out from under the
     # running process splits the transcript. The move dialog disables Move while
     # any are live; this guards the drag path too (and a race in either).
@@ -996,6 +998,16 @@ proc ::questlog::ui::app::move_one {src_path dst_cwd} {
     set new_path [::questlog::path::move_session $src_path $dst_cwd]
     set new_folder [::questlog::path::encode_cwd $dst_cwd]
     $SessionList relocate_card $src_path $new_path $new_folder $dst_cwd
+    # When the moved session is the one open in the viewer, follow it there too,
+    # so its ⋯ verbs act on the new location instead of the vanished old path
+    # (Move would no-op, Bookmark/Rename would throw). The bottom-strip path label
+    # tracks the same move.
+    if {[info exists Viewer] && $Viewer ne "" \
+        && [$Viewer current_path] eq $src_path} {
+        $Viewer relocate $new_path
+        set ViewerPath $new_path
+        refresh_status
+    }
 }
 
 # ---- bookmark callbacks ------------------------------------------------
