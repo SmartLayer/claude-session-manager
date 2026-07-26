@@ -342,6 +342,16 @@ oo::class create ::questlog::Scan {
     }
 
     # Coroutine body. Public so [namespace which my] resolves it.
+    #
+    # Two-stage when scan_stat_first is on and the snapshot sets no min-turns
+    # floor (issue #11): a first stat-only pass paints date/size/folder/uuid/
+    # bookmark from the filesystem alone, opening no file, so the list appears at
+    # filesystem speed; a content pass then opens each file and publishes the full
+    # row, which upgrades the skeleton in place. Under a floor above 1 a skeleton's
+    # unknown turn count cannot be placed, so the two-stage pass is suppressed and
+    # only the content pass runs - identical to the single-pass scan, showing no
+    # row a later read would drop. Off (or under a floor) it is the single content
+    # pass exactly as before.
     method run_scan {my_epoch} {
         # Yield once at the top so the caller's vwait is established
         # before any callback (OnRow / OnDone) fires. Otherwise short
@@ -354,16 +364,42 @@ oo::class create ::questlog::Scan {
         # A negative resolution is only valid within one pass: reset the memo so
         # a folder restored between passes is peeked afresh.
         set NegFolders [dict create]
-        set count 0
         set scanned 0
         set paths [my list_paths_for $Snapshot]
         set total [llength $paths]
+        set stat_first [expr {[::questlog::config::get scan_stat_first]
+            && [dict getdef $Snapshot min_turns 1] <= 1}]
+        # The progress denominator counts both stages when the stat pass runs, so
+        # the bar advances smoothly across the doubled work.
+        set span [expr {$stat_first ? 2 * $total : $total}]
+        if {$stat_first} {
+            set count 0
+            foreach path $paths {
+                if {$my_epoch != $Epoch} return
+                # Stat only, no file opened: the row carries date/size/folder/
+                # uuid/bookmark and is flagged stat_only so the content pass
+                # (and the consumer) knows it still needs its content.
+                set row [my scan_one_stat $path]
+                if {[dict size $row] > 0} { my publish_row $row }
+                incr count
+                if {$count % [::questlog::config::get scan_yield_files] == 0} {
+                    if {$OnProgress ne ""} { {*}$OnProgress $count $span }
+                    my schedule_resume [info coroutine]
+                    yield
+                    if {$my_epoch != $Epoch} return
+                }
+            }
+        }
+        set base [expr {$stat_first ? $total : 0}]
+        set count 0
         foreach path $paths {
             if {$my_epoch != $Epoch} return
             # The differential skip's memory is the consumer's: KnownMtime asks
             # what mtime it holds for this path, and an unchanged file is not
-            # re-read. Scan itself remembers nothing row-shaped, so without the
-            # callback every path scans.
+            # re-read. A skeleton the stat pass just published reads as unheld
+            # (the consumer answers "" for a stat-only row), so it is opened and
+            # upgraded here. Scan itself remembers nothing row-shaped, so without
+            # the callback every path scans.
             set existing_mtime ""
             if {$KnownMtime ne ""} {
                 set existing_mtime [{*}$KnownMtime $path]
@@ -381,13 +417,13 @@ oo::class create ::questlog::Scan {
             }
             incr count
             if {$count % [::questlog::config::get scan_yield_files] == 0} {
-                if {$OnProgress ne ""} { {*}$OnProgress $count $total }
+                if {$OnProgress ne ""} { {*}$OnProgress [expr {$base + $count}] $span }
                 my schedule_resume [info coroutine]
                 yield
                 if {$my_epoch != $Epoch} return
             }
         }
-        if {$OnProgress ne ""} { {*}$OnProgress $total $total }
+        if {$OnProgress ne ""} { {*}$OnProgress $span $span }
         set Active 0
         if {$OnDone ne ""} { {*}$OnDone $scanned }
     }
@@ -551,6 +587,40 @@ oo::class create ::questlog::Scan {
         return $row
     }
 
+    # The skeleton (stat-only) row for one session file, the first stage of the
+    # two-stage browse scan (issue #11). Everything here comes from the path and a
+    # single stat - no file is opened: date from mtime, size, the folder, the uuid
+    # and the bookmark glyph from the +x bit. The content-borne fields (first_user,
+    # slug, ai_title, nturns, has_subagents, cwd_hint) are left empty for the
+    # content pass to fill; nturns is "" (unknown), which is why a skeleton is only
+    # emitted with no min-turns floor. The stat_only flag marks the row so the
+    # consumer knows it still needs its content and the differential skip does not
+    # mistake it for a complete row. An empty dict when the file has already
+    # vanished. kind is deliberately absent so publish_row does not seed the
+    # search-corpus origin cache with an unread "" - the content pass classifies it.
+    method scan_one_stat {path} {
+        if {[catch {file mtime $path} mt]} { return [dict create] }
+        if {[catch {file size  $path} sz]} { set sz 0 }
+        return [dict create \
+            path $path \
+            mtime $mt \
+            size $sz \
+            folder [file tail [file dirname $path]] \
+            uuid [file rootname [file tail $path]] \
+            first_ts "" \
+            nturns "" \
+            first_user "" \
+            slug "" \
+            ai_title "" \
+            has_subagents 0 \
+            bookmarked [file executable $path] \
+            is_child 0 \
+            parent_path "" \
+            parent_uuid "" \
+            cwd_hint "" \
+            stat_only 1]
+    }
+
     # Publish a row into the stream. Used by run_scan and by Search (which
     # produces row data as a free side-effect of its own pass). The row's one
     # retained home is the consumer's; here the row only feeds Scan's own
@@ -593,6 +663,11 @@ oo::class create ::questlog::Scan {
     # memoises a failure only for the current pass, so a directory restored
     # later heals on the next scan of the row.
     method stamp_subtree {row} {
+        # A stat-only skeleton opens no file, and resolve_folder's peek would
+        # read one, so defer the folder_cwd stamp to the content pass. Absent, the
+        # field reads "" and row_subtree_match falls back to the folder name -
+        # exactly the folder-level evidence list_paths_for enumerated it on.
+        if {[dict getdef $row stat_only 0]} { return $row }
         if {[dict exists $row folder_cwd]} { return $row }
         set cwd [my resolve_folder [dict get $row folder]]
         if {$cwd ne ""} { set cwd [file normalize $cwd] }

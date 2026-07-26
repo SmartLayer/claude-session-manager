@@ -48,6 +48,17 @@ namespace eval ::questlog::config {
     # latency, so timer stays the default.
     dict set Config scan_resume        timer
     dict set Config scan_resume_ms     1
+    # 0 = single-pass browse scan (open every file, then publish its row); 1 =
+    # two-stage (issue #11): a first stat-only pass paints date/size/folder/uuid/
+    # bookmark from the filesystem alone (no file opened), then a content pass
+    # opens each file and fills the subject preview, slug and turn count in place.
+    # The cheap columns reach the screen at filesystem speed, off the per-file
+    # open. The head start is real only with no min-turns floor (min_turns 1): a
+    # skeleton's turn count is unknown until its file is read, so under a floor
+    # above 1 the two-stage pass is suppressed and the single content pass runs,
+    # showing no row that a later read would drop. Off here pending evaluation;
+    # the flip to default-on is a separate decision.
+    dict set Config scan_stat_first    0
     # 0 = pause the browse scan while the user is actively typing in the search
     # field, so keystrokes own the main thread; 1 = let the scan run regardless.
     dict set Config scan_while_typing  0
