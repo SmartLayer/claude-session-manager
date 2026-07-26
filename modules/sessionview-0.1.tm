@@ -23,10 +23,12 @@ package provide sessionview 0.1
 #   - a LIVE turn (the reason this base exists): live_open starts a growing
 #     turn, live_write streams text into it in place (savepoint/rewind: each
 #     chunk re-renders the provisional message tail, so markdown that
-#     completes across chunks settles correctly), live_working rides a
-#     "working…" marker on the base class's summary transaction, and
-#     live_close seals the region. append_records drops finished records
-#     (tool calls, results) into the open turn between streamed messages.
+#     completes across chunks settles correctly), live_set is its repaint
+#     twin for hosts whose frames repeat the message's whole text (replace,
+#     not append), live_working rides a "working…" marker on the base
+#     class's summary transaction, and live_close seals the region.
+#     append_records drops finished records (tool calls, results) into the
+#     open turn between streamed messages.
 #
 # Display-only: SessionView knows nothing about claude, processes, files or
 # the API. A subclass owns where records come from and what happens around
@@ -77,6 +79,7 @@ oo::class create ::sessionview::SessionView {
     variable StreamSp         ;# savepoint of the live streamed message ("" between messages)
     variable StreamBuf        ;# the streamed message's accumulated source text
     variable StreamRole       ;# the streamed message's role (labels its first render)
+    variable StreamSetId      ;# the id of the message live_set is repainting ("" between)
 
     constructor {parent args} {
         my configure -autofollow 1
@@ -230,6 +233,7 @@ oo::class create ::sessionview::SessionView {
         if {![info exists FindPos]}     { set FindPos "" }
         if {![info exists LastFindVar]} { set LastFindVar "" }
         if {![info exists StreamSp]}    { set StreamSp "" }
+        if {![info exists StreamSetId]} { set StreamSetId "" }
         next
         set Records [list]
         set LineMap [dict create]
@@ -626,6 +630,38 @@ oo::class create ::sessionview::SessionView {
         my batch { my summary_sync }
     }
 
+    # Idempotently REPLACE the streamed message's whole text, live_write's
+    # repaint twin: a host whose stream frames each repeat the message's
+    # entire text so far (self-healing repaints) calls this instead, and the
+    # accumulated text never doubles. turn_id names the message the frame
+    # belongs to: frames carrying one id replace each other's text (an
+    # identical frame repeated is a no-op); a frame with a fresh id finalizes
+    # the message in progress and starts its own, so a reply resuming after
+    # its tool calls renders as two messages, like live_write's
+    # flush-between-messages path. A frame for a message already finalized
+    # (live_flush ran; the id comes back) starts a new message: dropping late
+    # or duplicate frames past the finalize is the host's business.
+    method live_set {turn_id text {role assistant}} {
+        if {[my live] < 0} { error "live_set with no open turn" }
+        if {$StreamSp ne "" && $turn_id ne $StreamSetId} { my live_flush }
+        if {$StreamSp ne "" && $text eq $StreamBuf} { return }
+        set StreamSetId $turn_id
+        set StreamBuf $text
+        my batch {
+            set m [my append_open]
+            if {$StreamSp eq ""} {
+                set StreamRole $role
+                $Text insert end "[string toupper $role]  " \
+                    "lbl-[string tolower $role]"
+                set StreamSp [my savepoint]
+            } else {
+                my rewind $StreamSp
+            }
+            my insert_body $StreamRole $StreamBuf
+            my append_close $m
+        }
+    }
+
     # Finalize the streamed message in progress: the provisional tail becomes
     # settled document, the savepoint is released, and the next live_write
     # starts a fresh message. append_records and live_close call this
@@ -635,6 +671,7 @@ oo::class create ::sessionview::SessionView {
         if {$StreamSp ne ""} { my discard $StreamSp; set StreamSp "" }
         set StreamBuf ""
         set StreamRole ""
+        set StreamSetId ""
     }
 
     # Close the live turn: drop the working marker, seal the region (the

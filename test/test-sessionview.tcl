@@ -219,5 +219,46 @@ check "a second live_open opens the next region" [$V live] $n2
 check "the regions grew by one" [$V region_count] 4
 $V live_close
 
+# ---- 7. live_set: repaint frames replace, never double ----------------------
+# A host streaming repaint frames repeats the message's whole text each
+# flush; live_set replaces the provisional tail instead of appending it.
+check "live_set with no open turn errors" \
+    [catch {$V live_set 9 "orphan frame"}] 1
+set n3 [$V live_open "A repaint-framed prompt" "2026-07-20T10:20:00Z"]
+$V live_set 7 "Rep"
+$V live_set 7 "Repaint gro"
+$V live_set 7 "Repaint grows **who"
+$V live_set 7 "Repaint grows **whole**."
+update idletasks
+check "growing frames render the text exactly once" \
+    [llength [$V collect_matches "Repaint grows"]] 1
+check "no frame's prefix survives as a duplicate" \
+    [$Text search -elide -- "RepRepaint" 1.0 end] ""
+check "markdown closing across frames settled (no literal asterisks)" \
+    [$Text search -elide -- "**" 1.0 end] ""
+check "the repaint message carries the assistant label" \
+    [expr {[vischars "ASSISTANT"] > 0}] 1
+$V live_set 7 "Repaint grows **whole**."
+update idletasks
+check "an identical frame repeated is a no-op" \
+    [llength [$V collect_matches "Repaint grows"]] 1
+
+# A finished record lands between messages: append_records finalizes the
+# frame stream, and the next id's frames start a fresh message after it.
+set tooluse2 [::logman::parse_line {{"type":"assistant","timestamp":"2026-07-20T10:20:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t10","name":"Bash","input":{"command":"echo set-needle"}}]}}}]
+$V append_records [list $tooluse2]
+$V live_set 8 "Second mess"
+$V live_set 8 "Second message settles."
+update idletasks
+check "a fresh id's frames start their own message" \
+    [expr {[vischars "Second message settles."] > 0}] 1
+check "the first message survived the id change" \
+    [llength [$V collect_matches "Repaint grows"]] 1
+check "the appended record stayed hidden detail between them" \
+    [vischars "set-needle"] 0
+$V live_close
+update idletasks
+check "live_close seals the repaint turn" [dict get [$V region_info $n3] open] 0
+
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]
 exit $fails
