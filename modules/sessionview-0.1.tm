@@ -79,23 +79,19 @@ oo::class create ::sessionview::SessionView {
     variable StreamRole       ;# the streamed message's role (labels its first render)
 
     constructor {parent args} {
-        ::sessionview::ensure_fonts
-        set Records [list]
-        set LineMap [dict create]
-        set NextLine 0
-        set RenderTs 0
-        set RenderInSection 0
-        set FindVar ""
-        set FindMatches [list]
-        set FindCur -1
-        set FindPos ""
-        set LastFindVar ""
-        set StreamSp ""
-        set StreamBuf ""
-        set StreamRole ""
         my configure -autofollow 1
         if {[llength $args]} { my configure {*}$args }
         my setup $parent
+    }
+
+    # Assemble the view into `parent`: the base class's text and scrollbar,
+    # this class's tags and find bar, and a seeded document. A subclass with
+    # bespoke widget assembly (its own text widget in Text, its own find
+    # overlay) skips this and ends its build with `my reset` instead - the
+    # streamdoc pattern one level up.
+    method setup {parent} {
+        ::sessionview::ensure_fonts
+        next $parent
         my build_tags
         my build_find
         my reset
@@ -224,8 +220,16 @@ oo::class create ::sessionview::SessionView {
 
     # ---- document lifecycle ------------------------------------------------
 
-    # Empty the document and this class's caches with it.
+    # Empty the document and this class's caches with it. The first call
+    # also seeds this class's state - a subclass with bespoke assembly
+    # reaches here without the constructor's help, like the base class.
     method reset {} {
+        if {![info exists FindVar]}     { set FindVar "" }
+        if {![info exists FindMatches]} { set FindMatches [list] }
+        if {![info exists FindCur]}     { set FindCur -1 }
+        if {![info exists FindPos]}     { set FindPos "" }
+        if {![info exists LastFindVar]} { set LastFindVar "" }
+        if {![info exists StreamSp]}    { set StreamSp "" }
         next
         set Records [list]
         set LineMap [dict create]
@@ -348,6 +352,7 @@ oo::class create ::sessionview::SessionView {
             $Text insert end "▾ " {foldglyph turnhdr}
         }
         $Text insert end "$label  " "lbl-[string map {{ } _} [string tolower $label]]"
+        my on_label_rendered $rec $lineno $body $label $ts_iso
         # Assistant and tool_result records render one content block at a
         # time so each tool_use/thinking/tool_result/image block is its own
         # dk-* tagged run the turn's detail elide can hide; prompts and
@@ -501,6 +506,28 @@ oo::class create ::sessionview::SessionView {
     # carries the faint mono face and the detail-toggle click zone.
     method region_tags {payload} { return [list stub] }
 
+    # ---- subclass hooks ----------------------------------------------------
+    #
+    # Template-method seams a subclass layers app behaviour through, each
+    # with a no-op default (streamdoc's on_region_rendered style).
+
+    # After a record's role label is inserted, before its body: the seam for
+    # per-record app caches (a copy-source map, a role map) and for chrome
+    # riding the header line (a model chip).
+    method on_label_rendered {rec lineno body label ts_iso} {}
+
+    # After find_next collected a fresh match set (the term changed), before
+    # the step: the seam for an index a subclass keeps over the matches.
+    method on_find_collected {} {}
+
+    # After find_next landed on hit i: the seam for tracking the step in a
+    # subclass's own affordance (a highlight, a readout of its own).
+    method on_find_stepped {i} {}
+
+    # Tags whose text is chrome, not transcript: a hit there is skipped by
+    # collect_matches. A subclass extends the list for chrome of its own.
+    method find_chrome_tags {} { return [list stub foldglyph] }
+
     # ---- fold and jump -----------------------------------------------------
 
     # Header/stub click handlers, shared by every turn through the two global
@@ -641,6 +668,12 @@ oo::class create ::sessionview::SessionView {
 
     method find_hide {} {
         grid remove $Find
+        my find_clear
+    }
+
+    # Drop the find state: highlight, match set, cursor, readout. The one
+    # home for the clearing, whatever overlay a subclass dismisses around it.
+    method find_clear {} {
         $Text tag remove find 1.0 end
         set FindMatches [list]
         set FindCur -1
@@ -657,14 +690,18 @@ oo::class create ::sessionview::SessionView {
         if {$pattern eq ""} { return [list] }
         set results [list]
         set start 1.0
+        set skip [my find_chrome_tags]
         while {1} {
             set len 0
             set m [$Text search -elide -count len -nocase -- $pattern $start \
                 [my content_end]]
             if {$m eq ""} break
             set start "$m + ${len}c"
-            set mtags [$Text tag names $m]
-            if {"stub" in $mtags || "foldglyph" in $mtags} continue
+            set chrome 0
+            foreach tg [$Text tag names $m] {
+                if {$tg in $skip} { set chrome 1; break }
+            }
+            if {$chrome} continue
             $Text tag add find $m "$m + ${len}c"
             lappend results $m
         }
@@ -679,6 +716,7 @@ oo::class create ::sessionview::SessionView {
             set FindMatches [my collect_matches $FindVar]
             set FindCur -1
             set LastFindVar $FindVar
+            my on_find_collected
         }
         if {[llength $FindMatches] == 0} {
             set FindCur -1
@@ -691,6 +729,7 @@ oo::class create ::sessionview::SessionView {
         set FindCur [expr {$FindCur < 0 ? 0 : $FindCur + 1}]
         if {$FindCur >= [llength $FindMatches]} { set FindCur 0 }
         my reveal_index [lindex $FindMatches $FindCur]
+        my on_find_stepped $FindCur
         my update_find_readout
     }
 
