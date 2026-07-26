@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require tkdown
-package require sessionview
+package require showman
 
 # Round-robin interleave of per-term hit-position lists, already ordered
 # rarest-term-first by the caller. Returns a flat list: the first hit of each
@@ -45,7 +45,7 @@ proc ::questlog::ui::rarity_round_robin {term_positions} {
 # Search-within: Ctrl-F focuses an entry; Return advances to the next match.
 
 oo::class create ::questlog::ui::Viewer {
-    superclass ::sessionview::SessionView
+    superclass ::showman::Showman
     mixin leash
     variable Top
     variable Empty            ;# centered empty-state frame, shown until first load
@@ -215,7 +215,7 @@ oo::class create ::questlog::ui::Viewer {
         set RunPath ""
         set ErrBuf ""
         my build
-        # Base-class host wiring: sessionview (and streamdoc under it) drives
+        # Base-class host wiring: showman (and streamdoc under it) drives
         # the transcript widget built above (the shared Text), keeps a tail
         # reader latched across streamed appends, and its first reset seeds
         # the region store and the render/find/live state.
@@ -371,7 +371,7 @@ oo::class create ::questlog::ui::Viewer {
         menu $ActionMenu -tearoff 0
 
         # Sidebar toggle at the far left of the strip (Ctrl+B's mouse twin). The
-        # design icon (screens.jsx SessionViewer) is a panel outline with a
+        # design icon (the session-viewer screen in screens.jsx) is a panel outline with a
         # filled left pane and a divider; the left pane is solid when the list is
         # shown and dim when hidden, so the icon states the current mode. Two
         # photos, swapped by set_collapsed. It is the always-visible hint that
@@ -1088,9 +1088,9 @@ oo::class create ::questlog::ui::Viewer {
         $Text configure -state disabled
     }
 
-    # ---- turn folding and detail hiding: the app skin over sessionview -----
+    # ---- turn folding and detail hiding: the app skin over showman -----
     #
-    # The sessionview base class owns the turn model - the click handlers,
+    # The showman base class owns the turn model - the click handlers,
     # the stub summary hook, the record walk - and streamdoc under it owns
     # the regions (one per turn), their boundary marks and both elide layers,
     # f#N the fold and d#N the detail in that priority order, so nothing in
