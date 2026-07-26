@@ -63,9 +63,11 @@ package provide helmsman 1.0
 #             repeats the turn's entire text so far, so a dropped frame
 #             self-heals on the next one - and once more with done 1
 #             carrying the authoritative settled text.
-#   tool      {turn_id N k K label L}   a tool use inside turn N, k its
-#             ordinal within the turn, label "<tool> - <first line of
-#             its input>".
+#   tool      {turn_id N k K label L name T input DICT}   a tool use
+#             inside turn N, k its ordinal within the turn, label
+#             "<tool> - <first line of its input>"; name and input are
+#             the call itself, for a consumer rendering more than the
+#             one-line label.
 #   permission {req_id R tool_name T label L input DICT}   a tool-use
 #             permission parked awaiting answer_permission.
 #   question  {req_id R questions LIST}   an AskUserQuestion parked
@@ -689,7 +691,8 @@ oo::class create helmsman::Session {
             set tid $TurnNo
         }
         incr ToolK
-        my _emit [dict create type tool turn_id $tid k $ToolK label $label]
+        my _emit [dict create type tool turn_id $tid k $ToolK label $label \
+            name $name input $input]
     }
 
     method _set_turn {turn_id text state} {

@@ -251,6 +251,10 @@ $s send tooluse
 check "the tool event arrives" [await {[n_evs tool] >= 1}] 1
 check "the tool label names the call" \
     [dict get [last_ev tool] label] "Read - /etc/hosts"
+check "the tool event carries the call's name" \
+    [dict get [last_ev tool] name] Read
+check "and its full input" \
+    [dict get [last_ev tool] input] [dict create file_path /etc/hosts]
 check "the tool turn's settled text follows" \
     [await {[dict get [last_ev turn] text] eq "read it"}] 1
 check "the tool event keys to the turn its own message settled" \
