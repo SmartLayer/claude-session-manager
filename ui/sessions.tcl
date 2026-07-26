@@ -1815,7 +1815,7 @@ oo::class create ::questlog::ui::SessionList {
     method cell_values {node} {
         set kind [my node_field $node kind]
         if {$kind eq "folder"} {
-            set tot [my folder_totals [my node_field $node key]]
+            set tot [my folder_totals [my node_field $node key] 1]
             set size_sum ""
             set cost_sum ""
             if {[dict get $tot count] > 0} {
@@ -1847,7 +1847,7 @@ oo::class create ::questlog::ui::SessionList {
             switch -- $col {
                 size { return {meta foldagg} }
                 cost {
-                    set fc [dict get [my folder_totals [my node_field $node key]] cost]
+                    set fc [dict get [my folder_totals [my node_field $node key] 1] cost]
                     set ctag meta
                     if {$fc >= 1.0} {
                         set ctag cost-outlier
@@ -2045,7 +2045,8 @@ oo::class create ::questlog::ui::SessionList {
     }
 
     # The folder heading subject: the marker, the (truncated) project label and a
-    # bare "(N)" session count. The folder's size and cost aggregates are laid by
+    # bare "(N)" session count - "(N of M)" when a list filter hides some of the
+    # folder's rows, M the model count. The folder's size and cost aggregates are laid by
     # the base class as cells (cell_values) under the rows' size/cost columns, with an
     # empty date cell so the double tab opens straight into the size column; their
     # bold/tier tags come from cell_tag. The subject tags only its leading marker
@@ -2054,8 +2055,13 @@ oo::class create ::questlog::ui::SessionList {
     method folder_subject {node} {
         set f [my node_payload $node]
         set marker [expr {[my node_field $node expanded] ? "▾" : "▸"}]
-        set n [my folder_visible_count [my node_field $node key]]
-        set count_str [expr {$n > 0 ? " ($n)" : ""}]
+        set folder [my node_field $node key]
+        set n [my folder_visible_count $folder]
+        set total [dict get [my folder_totals $folder] count]
+        set count_str ""
+        if {$n > 0} {
+            set count_str [expr {$total > $n ? " ($n of $total)" : " ($n)"}]
+        }
         # Marker joined to the label by a space; the label is truncated so it
         # never runs into the right-pinned aggregates.
         set fixed [expr {[font measure QLList "$marker "] \
@@ -2277,10 +2283,13 @@ oo::class create ::questlog::ui::SessionList {
 
     # A folder's count/size/cost, summed from its member sessions' payloads at
     # ask time (issue #60): nothing is stored, so a move, forget or freshen
-    # cannot leave a heading's totals behind.
-    method folder_totals {folder} {
+    # cannot leave a heading's totals behind. shown=1 skips the rows a
+    # list-view toggle is hiding, so the heading's aggregates agree with its
+    # visible count.
+    method folder_totals {folder {shown 0}} {
         set n 0; set sz 0; set cst 0.0
         foreach sid [my node_field [my fid $folder] children] {
+            if {$shown && [my node_field $sid hidden]} continue
             incr n
             set sz [expr {$sz + [my node_pget $sid size 0]}]
             set c [my node_pget $sid cost]
