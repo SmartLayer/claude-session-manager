@@ -7,8 +7,8 @@
 # row_in_bounds), independent of the view toggles. A toggle sets a per-session
 # `hidden` flag and re-renders the affected folders via collapse+expand; the
 # row stays in the model (model total unchanged, so the toggle is reversible),
-# and the selection - keyed by path, not by a rendered mark - survives the hide
-# and re-paints on the show. The heading's displayed count, by contrast, tracks
+# and the selection - keyed by node id, not by a rendered mark - survives the
+# hide and re-paints on the show. The heading's displayed count, by contrast, tracks
 # the viewable sessions and so drops when a row hides (see test-folder-detach
 # for the folder that detaches once its viewable count reaches zero).
 
@@ -107,7 +107,7 @@ check "A is selected" [$SL is_selected $Ap] 1
 # --- 3. Turn the bookmarked filter on. A hides in place but stays
 #        in the model; B keeps rendering; the model total holds at 2 (so the
 #        toggle is reversible) while the viewable count drops to 1; A's selection
-#        is retained (path-keyed) though it is unpainted.
+#        is retained (node-id-keyed) though it is unpainted.
 $SL attr_filter_set bookmarked 1
 update
 check "A not rendered (hidden)"   [$SL sflag $Ap rendered] 0

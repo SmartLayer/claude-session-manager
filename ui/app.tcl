@@ -998,15 +998,26 @@ proc ::questlog::ui::app::move_one {src_path dst_cwd} {
     set new_path [::questlog::path::move_session $src_path $dst_cwd]
     set new_folder [::questlog::path::encode_cwd $dst_cwd]
     $SessionList relocate_card $src_path $new_path $new_folder $dst_cwd
-    # When the moved session is the one open in the viewer, follow it there too,
-    # so its ⋯ verbs act on the new location instead of the vanished old path
-    # (Move would no-op, Bookmark/Rename would throw). The bottom-strip path label
-    # tracks the same move.
-    if {[info exists Viewer] && $Viewer ne "" \
-        && [$Viewer current_path] eq $src_path} {
-        $Viewer relocate $new_path
-        set ViewerPath $new_path
-        refresh_status
+    # When the open session is the one moved, follow it in the viewer too, so its
+    # ⋯ verbs act on the new location instead of the vanished old path (Move would
+    # no-op, Bookmark/Rename would throw). A subagent transcript of the moved
+    # parent counts: its sidecar dir relocated with the parent, so a child open in
+    # the viewer must repoint to its new path under the parent's new residence.
+    # The bottom bar's path line tracks the same move.
+    if {[info exists Viewer] && $Viewer ne ""} {
+        set vp [$Viewer current_path]
+        set base_old [file rootname $src_path]
+        set new_vp ""
+        if {$vp eq $src_path} {
+            set new_vp $new_path
+        } elseif {[string match "$base_old/*" $vp]} {
+            set new_vp "[file rootname $new_path][string range $vp [string length $base_old] end]"
+        }
+        if {$new_vp ne ""} {
+            $Viewer relocate $new_vp
+            set ViewerPath $new_vp
+            refresh_status
+        }
     }
 }
 

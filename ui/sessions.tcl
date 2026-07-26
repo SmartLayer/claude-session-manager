@@ -2512,7 +2512,8 @@ oo::class create ::questlog::ui::SessionList {
     # Shift selects a contiguous range within one folder. Membership is keyed by
     # the stable node id, so it survives the frequent re-renders and follows a
     # moved session for free (a move re-parents the node, its id unchanged); the
-    # readers that hand a path onward resolve sid -> key at the boundary.
+    # path-facing accessors (is_selected, selection_paths) resolve sid -> key at
+    # the boundary.
 
     method is_selected {path} {
         return [expr {[my has_session $path] && [dict exists $SelectedSet [my sid $path]]}]

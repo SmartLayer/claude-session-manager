@@ -9,7 +9,7 @@
 #
 # Invariant under test: a filter click reaches no disk (the scan sees no new
 # scan_path), hides/shows loaded rows by the base class's excluded-set rules
-# (attr_admits), and keeps a path-keyed selection across the hide and the show.
+# (attr_admits), and keeps a node-id-keyed selection across the hide and the show.
 
 package require Tcl 9
 package require Tk
@@ -144,7 +144,7 @@ $SL selection_set $Ap
 check "A is selected" [$SL is_selected $Ap] 1
 
 # --- 4. Running filter. Mark B running, then flip "running only": B stays, A and C
-#        hide in place. The selection on the hidden A is retained (path-keyed).
+#        hide in place. The selection on the hidden A is retained (node-id-keyed).
 set Buuid [file rootname [file tail $Bp]]
 $SL reconcile_running [dict create $Buuid $Bp]
 $SL attr_filter_set running 1

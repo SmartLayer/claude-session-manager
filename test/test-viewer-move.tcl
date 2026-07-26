@@ -59,6 +59,12 @@ set PROOT [file join $SAND .claude projects]
 set a1 [file join $PROOT $FA aaaa.jsonl]
 write_session $a1 {a1-one a1-two} $CWDA "2026-07-24T17:00"
 file mtime $a1 [clock scan "2026-07-24 17:01:00" -gmt 1]
+# A subagent sidecar so a child transcript can be opened in the viewer and its
+# parent moved (the child-in-viewer case).
+set a1side [file join $PROOT $FA aaaa subagents]
+::questlog::path::_real_file mkdir $a1side
+set a1child [file join $a1side agent-1.jsonl]
+write_session $a1child {sub-one} $CWDA "2026-07-24T17:02"
 
 set SL ""
 set ::Scan [::questlog::Scan new [list apply {{r} { $::SL on_scan_row $r }}] noop]
@@ -116,6 +122,29 @@ set rc [catch {::questlog::ui::app::on_bookmark_toggle [$VW current_path]} err]
 check "Bookmark from the viewer does not throw" $rc 0
 check "Bookmark from the viewer flipped the +x bit" [file executable $a1_new] 1
 check "store clean after the viewer move" [$SL audit] {}
+
+# --- Child-in-viewer: a subagent transcript is open when its PARENT moves. The
+#     sidecar dir relocates on disk, so the viewer must repoint the child to its
+#     new path, not the deleted one. a1 now lives under B (with its sidecar); open
+#     the child there and move a1 back to A.
+set child_b [file join $PROOT $FB aaaa subagents agent-1.jsonl]
+check "the child transcript is on disk under B" [file isfile $child_b] 1
+$VW show $child_b
+update
+check "viewer shows the child transcript" [$VW current_path] $child_b
+::questlog::ui::app::move_one $a1_new $CWDA
+update
+set child_a [file join $PROOT $FA aaaa subagents agent-1.jsonl]
+check "the child followed its parent on disk"   [file isfile $child_a] 1
+check "the old child path is gone from disk"     [file isfile $child_b] 0
+check "viewer repointed the open child to its new path" [$VW current_path] $child_a
+# The bug this closes: on the stale child path, Bookmark throws; on the followed
+# path it acts.
+check "Bookmark on the stale child path would throw" \
+    [catch {::questlog::path::set_bookmark $child_b}] 1
+check "Bookmark on the followed child does not throw" \
+    [catch {::questlog::path::set_bookmark [$VW current_path]}] 0
+check "store clean after the child-in-viewer move" [$SL audit] {}
 
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]

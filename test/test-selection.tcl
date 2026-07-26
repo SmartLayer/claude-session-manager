@@ -1,11 +1,12 @@
 #!/usr/bin/env wish9.0
 # Multi-selection model for the session list.
 #
-# The list holds a set of selected session paths (SelectedSet) with an anchor.
-# A plain click selects one; Control toggles one across folders; Shift selects a
-# contiguous range within one folder. The set is path-keyed, so it survives a
-# move (relocate_card re-keys it) and a delete (forget_session drops it). This
-# drives the model directly over a two-folder sandbox and asserts each gesture
+# The list holds a set of selected sessions (SelectedSet) with an anchor, keyed
+# by the stable node id (sid). A plain click selects one; Control toggles one
+# across folders; Shift selects a contiguous range within one folder. Because the
+# id does not change, the set survives a move for free (the node re-parents) and
+# a delete drops it (forget_session purges by id). This drives the model directly
+# over a two-folder sandbox and asserts each gesture
 # and each survival path.
 
 package require Tcl 9
@@ -110,9 +111,10 @@ check "both folders streamed in" \
 check "folder_visible_paths is date-descending order" \
     [$SL folder_visible_paths $FA] [list $a01 $a02 $a03]
 
-# ---- folder selection: name-keyed, exclusive with session selection ------
-# A folder heading is selectable too, but held apart from the path-keyed session
-# set (a folder is name-keyed). The two selections are mutually exclusive.
+# ---- folder selection: fid-keyed, exclusive with session selection ------
+# A folder heading is selectable too, but held apart from the session set: the
+# highlight keys by the folder's node id (fid), the session set by sid. The two
+# selections are mutually exclusive.
 $SL selection_set $a02
 $SL folder_select $FA
 check "folder_select highlights the folder" [$SL is_folder_selected $FA] 1
