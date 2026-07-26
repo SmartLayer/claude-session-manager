@@ -2,9 +2,8 @@ package require Tcl 9
 package require Tk
 package require logman
 package require showman
-package provide conversation 0.1
 
-# conversation - a Claude conversation as one composed surface: the
+# ::questlog::ui::Conversation - a Claude conversation as one composed surface: the
 # showman transcript above, a prompt strip for the two prompts a
 # session raises mid-turn (a tool-use permission, a question), and an
 # input strip for the operator's typed line below. Driver-agnostic on
@@ -88,7 +87,7 @@ package provide conversation 0.1
 #
 # SYNOPSIS - helmsman behind the seam (the continue-a-session window):
 #
-#   set c [::conversation::Conversation new .f -on_send {glue_send}]
+#   set c [::questlog::ui::Conversation new .f -on_send {glue_send}]
 #   set s [MySession new $dir $logs {glue_event}]   ;# helmsman::Session
 #   proc glue_send {ev} {
 #       switch -- [dict get $ev type] {
@@ -125,9 +124,7 @@ package provide conversation 0.1
 # hidden), -view {opts} (passed to the Showman constructor:
 # -palette, -fonts, -idle_gap and streamdoc's own).
 
-namespace eval ::conversation {}
-
-oo::class create ::conversation::Conversation {
+oo::class create ::questlog::ui::Conversation {
     variable Top          ;# the host frame the surface grids into
     variable V            ;# the composed ::showman::Showman
     variable OnSend       ;# the seam: a command prefix, "" for none

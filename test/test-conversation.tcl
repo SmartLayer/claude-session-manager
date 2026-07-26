@@ -1,5 +1,5 @@
 #!/usr/bin/env wish9.0
-# The conversation module: the driver-agnostic surface composing the
+# The conversation UI class: the driver-agnostic surface composing the
 # showman transcript, the prompt strip and the input strip around the
 # one -on_send seam.
 #
@@ -22,8 +22,8 @@ package require json
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
 ::tcl::tm::path add [file join $ROOT modules]
 ::tcl::tm::path add [file join $ROOT vendor]
-package require conversation
 package require helmsman
+source [file join $ROOT ui conversation.tcl]
 
 set fails 0
 proc check {name got want} {
@@ -62,7 +62,7 @@ set sent {}
 proc collect {ev} { lappend ::sent $ev }
 
 ttk::frame .a
-set C [::conversation::Conversation new .a -on_send collect]
+set C [::questlog::ui::Conversation new .a -on_send collect]
 pack .a -fill both -expand 1
 update idletasks
 
@@ -221,7 +221,7 @@ check "a click on the disabled strip sends nothing" [llength $sent] $before
 
 # View-only construction: no seam, no input strip from the start.
 ttk::frame .ro
-set RO [::conversation::Conversation new .ro -input 0]
+set RO [::questlog::ui::Conversation new .ro -input 0]
 pack .ro -fill both -expand 1
 update idletasks
 check "-input 0 starts with the strip hidden" [winfo ismapped .ro.input] 0
@@ -370,7 +370,7 @@ proc glue_event {ev} {
 
 destroy .a
 ttk::frame .b
-set B [::conversation::Conversation new .b -on_send glue_send]
+set B [::questlog::ui::Conversation new .b -on_send glue_send]
 pack .b -fill both -expand 1
 update idletasks
 set BV [$B viewer]
