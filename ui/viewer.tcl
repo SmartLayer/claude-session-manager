@@ -747,6 +747,17 @@ oo::class create ::questlog::ui::Viewer {
         bind $Text <<ContextMenu>> [list [self] on_right %x %y %X %Y]
         bind $Text <Configure>     [list [self] on_resize]
 
+        # A key acts from where the reader is looking. Every motion key the Text
+        # class defines (the arrows, Home, End, Prior, Next, and the Control-key
+        # twins Tk adds while tk_strictMotif is off) ends in tk::TextSetCursor,
+        # which does `see insert`. Nobody types into a transcript, so its insert
+        # mark sits where the render left it, on the last line of the session.
+        # Left alone, one arrow press throws the reader from the message they
+        # were on to the end of the transcript. Re-seating the mark before the
+        # class handler runs turns the same keys into paging from the viewport,
+        # which is what a reading pane wants them to be.
+        bind $Text <KeyPress> [list [self] park_cursor]
+
         # Hover copy button: one shared ⧉ affordance riding the top-right of the
         # message under the pointer (copy_motion places it, copy_hide forgets
         # it). A child of $Text but never `window create`d into it, so the text
@@ -1597,6 +1608,14 @@ oo::class create ::questlog::ui::Viewer {
     method on_resize {} {
         ::tkdown::refit $Text
         my tables_refit
+    }
+
+    # Seat the insert mark on the first visible line when it has drifted out of
+    # view, which a render, a wheel scroll or a find jump all leave it. A mark
+    # still on screen is where the previous keystroke put it, so it stays: that
+    # is what lets a run of arrow presses walk instead of resetting each time.
+    method park_cursor {} {
+        if {[$Text bbox insert] eq ""} { $Text mark set insert @0,0 }
     }
 
     method build_menu {} {
