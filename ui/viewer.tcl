@@ -30,6 +30,60 @@ proc ::questlog::ui::rarity_round_robin {term_positions} {
     return $out
 }
 
+# Pixel widths for a table's columns: the natural widths when they fit in
+# avail, otherwise a proportional shrink of the columns above floorpx (one
+# clamp-redistribute pass - a clamped column's shortfall is not re-spread,
+# accepted as a few pixels of overshoot). Columns at or under the floor keep
+# their natural width: squeezing a narrow label column buys nothing and
+# costs its readability. Pure; unit-tested.
+proc ::questlog::ui::table_colwidths {naturals avail floorpx} {
+    set total 0
+    foreach n $naturals { incr total $n }
+    if {$total <= $avail} { return $naturals }
+    set fixed 0
+    set flex 0
+    foreach n $naturals {
+        if {$n <= $floorpx} { incr fixed $n } else { incr flex $n }
+    }
+    set room [expr {$avail - $fixed}]
+    set out [list]
+    foreach n $naturals {
+        if {$n <= $floorpx} { lappend out $n; continue }
+        set w [expr {$room > 0 ? ($n * $room) / $flex : $floorpx}]
+        if {$w < $floorpx} { set w $floorpx }
+        lappend out $w
+    }
+    return $out
+}
+
+# A parsed table payload ({align rows}, tkdown's segment_tables shape) back
+# to GFM markdown. Cells re-escape the "|" that split_row decoded, so the
+# text round-trips through segment_tables to the same payload. The source's
+# padding and its left-colon spelling of a left column are not in the
+# payload, so the delimiter row is regenerated canonically. Pure; unit-tested.
+proc ::questlog::ui::table_to_markdown {payload} {
+    set lines [list]
+    set first 1
+    foreach row [dict get $payload rows] {
+        set cells [list]
+        foreach cell $row { lappend cells [string map {"|" "\\|"} $cell] }
+        lappend lines "| [join $cells { | }] |"
+        if {$first} {
+            set d [list]
+            foreach a [dict get $payload align] {
+                switch -- $a {
+                    right   { lappend d "---:" }
+                    center  { lappend d ":---:" }
+                    default { lappend d "---" }
+                }
+            }
+            lappend lines "| [join $d { | }] |"
+            set first 0
+        }
+    }
+    return [join $lines "\n"]
+}
+
 # ::questlog::ui::Viewer - read-only segmented session viewer.
 #
 # A single instance docked in the right pane. `show path lineno` loads a
@@ -111,6 +165,22 @@ oo::class create ::questlog::ui::Viewer {
     variable CopyFirst
     variable CopyLast
     variable CopyFbTok
+    # Embedded tables: each GFM table renders as a real grid widget (frame of
+    # word-wrapping per-cell text widgets) embedded at its place in the
+    # transcript, so wide cells wrap instead of clipping at the pane edge.
+    # The cost inherent to an embedded window - its text is invisible to
+    # $Text search and to a drag-selection - is paid back in table_scan
+    # (search) and the per-table ⧉ / per-message copy (clipboard). Tables is
+    # the registry: id -> {mark frame payload flat lit fbtok cells}, where
+    # mark (tbl#m<id>) anchors the window's index, payload is tkdown's
+    # parsed {align rows}, flat holds the cells' plain rendered text for
+    # table_scan, lit marks the spotlighted table, fbtok the ✓ restore
+    # timer, cells the realized cell widgets.
+    variable Tables
+    variable TableSeq         ;# last table id issued; reset per document
+    variable LitTable         ;# id of the spotlighted table, "" while none
+    variable TableHitLabel    ;# dict: table mark -> match excerpt for the band row
+    variable TblRefitTok      ;# leash token of the debounced tables_refit pass
     # Docked index band above the transcript: one collapsible pane whose content
     # switches between the match index and the tool-call timeline. Docked, it
     # takes its height from the split and never covers the reading view.
@@ -189,6 +259,11 @@ oo::class create ::questlog::ui::Viewer {
         set CopyFirst 0
         set CopyLast 0
         set CopyFbTok ""
+        set Tables [dict create]
+        set TableSeq 0
+        set LitTable ""
+        set TableHitLabel [dict create]
+        set TblRefitTok ""
         set BandTab "matches"
         set BandOpen 0
         set BandSash ""
@@ -651,6 +726,11 @@ oo::class create ::questlog::ui::Viewer {
         bind $Text <<Copy>> "[list [self] copy_selection]; break"
         $Text tag configure recap     -background [::questlog::ui::theme::c recap]
         $Text tag configure find      -background [::questlog::ui::theme::c find]
+        # The one-char segment holding each embedded table window. The tag is
+        # load-bearing beyond the margins: an untagged window segment falls to
+        # the text's default wrap and can break its line's layout (the badge
+        # rule in the session list), so table_emit tags every window char.
+        $Text tag configure tblwin -lmargin1 10 -lmargin2 10
         # End-of-session hint: a centred, deeply inset cue that the reader can
         # send one more prompt. The wide left/right margin (derived from the mono
         # font so it scales with the reading size) sets it apart from the
@@ -661,8 +741,8 @@ oo::class create ::questlog::ui::Viewer {
             -lmargin1 $hintpad -lmargin2 $hintpad -rmargin $hintpad \
             -spacing1 [font metrics QLMono -linespace] -spacing3 6
 
-        # Right-click copy (issue #4); the <Configure> refit keeps rendered
-        # markdown tables' tab stops sized to the reading font.
+        # Right-click copy (issue #4); the <Configure> refit re-fits the
+        # embedded tables' column widths and wrapped heights to the pane.
         my build_menu
         bind $Text <<ContextMenu>> [list [self] on_right %x %y %X %Y]
         bind $Text <Configure>     [list [self] on_resize]
@@ -1128,6 +1208,10 @@ oo::class create ::questlog::ui::Viewer {
     # the next Motion re-places it.
     method reveal_index {idx} {
         my copy_hide
+        # A table match's record is its mark: light that table (and unlight
+        # the last) before the see, so a lazy realization the jump itself
+        # triggers builds the table already lit. A plain index only clears.
+        my table_spotlight $idx
         next $idx
     }
 
@@ -1376,15 +1460,23 @@ oo::class create ::questlog::ui::Viewer {
         if {$was_detached} { my prompt_status "" }
     }
 
-    # Insert one turn's body. A body with no blockquote goes wholesale to
-    # ::tkdown::body (fenced code under the block `code` tag, everything else
-    # markdown prose over `body`). An assistant body carrying blockquotes
-    # keeps the fence split here, because a quote run becomes an inset tagged
-    # block, app chrome tkdown knows nothing about.
+    # Insert one turn's body. The fence split lives here (::tkdown::body's
+    # shape, fenced code under the block `code` tag) because two runs are app
+    # chrome tkdown knows nothing about: a blockquote run becomes an inset
+    # tagged block, and a prose run's tables become embedded grid widgets
+    # (insert_prose).
     method insert_body {t body} {
         set has_quote [expr {$t eq "assistant" && [regexp -line {^>} $body]}]
         if {!$has_quote} {
-            ::tkdown::body $Text end $body body code
+            foreach seg [::tkdown::segment_code_fences $body] {
+                lassign $seg kind text
+                if {$kind eq "code"} {
+                    $Text insert end "$text\n" code
+                } else {
+                    my insert_prose $text "\n"
+                }
+            }
+            $Text insert end "\n" body
             return
         }
         if {![regexp -line {^\s*```} $body]} {
@@ -1398,10 +1490,35 @@ oo::class create ::questlog::ui::Viewer {
             } elseif {[regexp -line {^>} $text]} {
                 my insert_segments $text
             } else {
-                ::tkdown::prose $Text end $text body "\n"
+                my insert_prose $text "\n"
             }
         }
         $Text insert end "\n" body
+    }
+
+    # Insert one prose run: ::tkdown::prose's contract (headings, lists,
+    # inline spans over `body`, closed by suffix), except that each GFM table
+    # segment becomes an embedded grid via table_emit instead of tkdown's
+    # tab-aligned lines, which cannot wrap a wide cell. A table-free run goes
+    # to ::tkdown::prose whole; a run carrying tables is split and its normal
+    # segments rendered suffix-less, mirroring tkdown's own piecewise walk.
+    method insert_prose {text {suffix "\n"}} {
+        set segs [::tkdown::segment_tables $text]
+        set has_table 0
+        foreach s $segs { if {[lindex $s 0] eq "table"} { set has_table 1; break } }
+        if {!$has_table} {
+            ::tkdown::prose $Text end $text body $suffix
+            return
+        }
+        foreach s $segs {
+            lassign $s kind payload
+            if {$kind eq "table"} {
+                my table_emit $payload
+            } else {
+                ::tkdown::prose $Text end $payload body ""
+            }
+        }
+        if {$suffix ne ""} { $Text insert end $suffix body }
     }
 
     # Insert the model chip on the current header line: a tinted run of a coloured
@@ -1432,7 +1549,7 @@ oo::class create ::questlog::ui::Viewer {
                 my insert_quote_text $text
                 set atstart 1
             } else {
-                ::tkdown::prose $Text end $text body "\n"
+                my insert_prose $text "\n"
                 set atstart 1
             }
         }
@@ -1479,6 +1596,7 @@ oo::class create ::questlog::ui::Viewer {
 
     method on_resize {} {
         ::tkdown::refit $Text
+        my tables_refit
     }
 
     method build_menu {} {
@@ -1633,6 +1751,342 @@ oo::class create ::questlog::ui::Viewer {
         if {[winfo exists $CopyBtn]} { $CopyBtn configure -text "⧉" }
     }
 
+    # ---- embedded tables ----------------------------------------------------
+    #
+    # Each GFM table is one embedded window in the transcript: a frame whose
+    # gridded per-cell text widgets wrap long cells, where tab-aligned lines
+    # clipped them at the pane edge. The window realizes lazily (-create, the
+    # session list's badge precedent: eager widgets per item peg a core), so
+    # everything search and jump need - the parsed payload, the cells' plain
+    # text, the anchoring mark - is recorded at emit time, none of it in the
+    # widget. The mark doubles as the table's match record in FindMatches.
+
+    # Emit one table at the transcript tail: the window char (tagged tblwin -
+    # untagged it would fall to the default wrap), its left-gravity mark, and
+    # the registry entry. flat is the payload's cells as the reader sees them
+    # (inline markers dropped), the haystack table_scan searches.
+    method table_emit {payload} {
+        set id [incr TableSeq]
+        set flat [list]
+        foreach row [dict get $payload rows] {
+            set frow [list]
+            foreach cell $row {
+                set s ""
+                foreach run [::tkdown::parse_inline $cell] { append s [lindex $run 1] }
+                lappend frow $s
+            }
+            lappend flat $frow
+        }
+        set i0 [$Text index "end-1c"]
+        $Text window create end -align top -pady 2 -stretch 0 \
+            -create [list [self] table_realize $id]
+        $Text tag add tblwin $i0 "$i0 +1c"
+        $Text mark set tbl#m$id $i0
+        $Text mark gravity tbl#m$id left
+        $Text insert end "\n\n" body
+        dict set Tables $id [dict create mark tbl#m$id frame $Text.tbl$id \
+            payload $payload flat $flat lit 0 fbtok "" cells [list]]
+    }
+
+    # Build the table's widget when Tk first shows its window. A plain frame
+    # (clam ignores -background on ttk frames): its background is the gridline
+    # colour, visible through the 1px cell gutters, and the spotlight repaints
+    # it. Cells are text widgets because a cell mixes fonts (bold, `code`),
+    # which rules out labels and canvas items. The wheel and hover bindings
+    # ride one shared bindtag; column widths and heights settle in table_fit
+    # once the frame has geometry.
+    method table_realize {id} {
+        set t [dict get $Tables $id]
+        set f [dict get $t frame]
+        if {[winfo exists $f]} { return $f }
+        frame $f -background [::questlog::ui::theme::c faint]
+        set align [dict get $t payload align]
+        set ncol [llength $align]
+        set bg [$Text cget -background]
+        set cells [list]
+        set r 0
+        foreach row [dict get $t payload rows] {
+            for {set j 0} {$j < $ncol} {incr j} {
+                set c $f.c${r}x$j
+                text $c -wrap word -width 1 -height 1 -borderwidth 0 \
+                    -highlightthickness 0 -padx 4 -pady 2 -takefocus 0 \
+                    -background $bg \
+                    -foreground [::questlog::ui::theme::c body] -font QLBody \
+                    -cursor [$Text cget -cursor]
+                my table_fill_cell $c [lindex $row $j] \
+                    [expr {$r == 0}] [lindex $align $j]
+                grid $c -row $r -column $j -sticky nsew -padx 1 -pady 1
+                # Heights are event-driven: whenever grid hands the cell a
+                # width (first map, a column re-fit, a font change), resync
+                # -height to the wrapped line count. Scheduling the resync as
+                # an idle pass raced the pending ConfigureNotify and measured
+                # the cell one char wide.
+                bind $c <Configure> [list [self] table_cell_height $c]
+                lappend cells $c
+            }
+            incr r
+        }
+        # Table copy: ⧉ placed at the top-right while the pointer is over the
+        # table (table_hover_*), copying the table as GFM markdown - the
+        # remedy for an embedded window's text being invisible to a
+        # drag-selection copy.
+        ttk::button $f.copy -style Copy.TButton -text "⧉" -width 2 \
+            -takefocus 0 -cursor hand2 -command [list [self] table_copy $id]
+        # Wheel forwarding (load-bearing): an embedded window swallows the
+        # wheel as the pointer crosses it - the defect that de-widgetised the
+        # quotes - so forward to $Text's yview exactly as the CopyBtn does,
+        # via one bindtag shared by the frame, every cell and the button. The
+        # break stops the cell's own Text-class scroll. copy_hide first: the
+        # scroll slides text under a parked message-copy button.
+        set wt qlw$f
+        bind $wt <MouseWheel> \
+            "[list [self] copy_hide]; tk::MouseWheel $Text y \[tk::ScaleNum %D\] -4.0 pixels; break"
+        bind $wt <Shift-MouseWheel> \
+            "[list [self] copy_hide]; tk::MouseWheel $Text x \[tk::ScaleNum %D\] -4.0 pixels; break"
+        bind $wt <TouchpadScroll> \
+            "[list [self] copy_hide]; lassign \[tk::PreciseScrollDeltas %D\] qtdx qtdy;\
+             if {\$qtdy != 0} {$Text yview scroll \[tk::ScaleNum \[expr {-\$qtdy}\]\] pixels};\
+             break"
+        bind $wt <Enter> [list [self] table_hover_enter $id]
+        bind $wt <Leave> [list [self] table_hover_leave $id]
+        foreach w [concat [list $f $f.copy] $cells] {
+            bindtags $w [linsert [bindtags $w] 1 $wt]
+        }
+        dict set Tables $id cells $cells
+        if {[dict get $t lit]} {
+            $f configure -background [::questlog::ui::theme::c find]
+        }
+        my later idle [list [self] table_fit $id]
+        return $f
+    }
+
+    # Fill one cell from its raw markdown text: parse_inline runs under
+    # per-cell face tags on the QL named fonts (a font change reflows the
+    # cells for free). A header cell goes all-bold via hb, configured last so
+    # it outranks the span faces - the td-head rule. The al tag right- or
+    # centre-justifies an aligned column's wrap.
+    method table_fill_cell {c cell header align} {
+        foreach {tg fnt} {b QLBodyBold i QLBodyItalic bi QLBodyBoldItalic cd QLMono} {
+            $c tag configure $tg -font $fnt
+        }
+        $c tag configure hb -font QLBodyBold
+        if {$align ne "left"} { $c tag configure al -justify $align }
+        foreach run [::tkdown::parse_inline $cell] {
+            lassign $run style chunk
+            set tags [list]
+            switch -- $style {
+                code       { lappend tags cd }
+                bold       { lappend tags b }
+                italic     { lappend tags i }
+                bolditalic { lappend tags bi }
+            }
+            $c insert end $chunk $tags
+        }
+        if {$header} { $c tag add hb 1.0 end }
+        if {$align ne "left"} { $c tag add al 1.0 end }
+        $c configure -state disabled
+    }
+
+    # The rendered pixel width of one cell, each inline run measured in the
+    # font it paints in; a header cell measures all-bold (hb outranks the
+    # span faces). The cell's own -padx rides on top.
+    method table_cell_px {cell header} {
+        set px 0
+        foreach run [::tkdown::parse_inline $cell] {
+            lassign $run style chunk
+            if {$header} {
+                set fnt QLBodyBold
+            } else {
+                switch -- $style {
+                    code       { set fnt QLMono }
+                    bold       { set fnt QLBodyBold }
+                    italic     { set fnt QLBodyItalic }
+                    bolditalic { set fnt QLBodyBoldItalic }
+                    default    { set fnt QLBody }
+                }
+            }
+            incr px [font measure $fnt $chunk]
+        }
+        return $px
+    }
+
+    # Derive column widths from the pane and pin them as grid minsizes; the
+    # cells' <Configure> bindings turn the resulting resizes into wrapped
+    # heights. Naturals re-measure on every pass, which is what makes a
+    # reading-font change re-fit with no extra flag.
+    method table_fit {id} {
+        if {![dict exists $Tables $id]} return
+        set t [dict get $Tables $id]
+        set f [dict get $t frame]
+        if {![winfo exists $f]} return
+        if {[winfo width $Text] <= 1} return
+        set align [dict get $t payload align]
+        set ncol [llength $align]
+        set naturals [lrepeat $ncol 0]
+        set header 1
+        foreach row [dict get $t payload rows] {
+            for {set j 0} {$j < $ncol} {incr j} {
+                set px [expr {[my table_cell_px [lindex $row $j] $header] + 9}]
+                if {$px > [lindex $naturals $j]} { lset naturals $j $px }
+            }
+            set header 0
+        }
+        # The reading width less the tblwin left margin, a right inset, and
+        # the cells' 1px grid gutters.
+        set avail [expr {[winfo width $Text] - 10 - 12 - $ncol * 2}]
+        set floorpx [expr {8 * [font measure QLBody "0"]}]
+        set widths [::questlog::ui::table_colwidths $naturals $avail $floorpx]
+        for {set j 0} {$j < $ncol} {incr j} {
+            grid columnconfigure $f $j -minsize [lindex $widths $j] -weight 0
+        }
+    }
+
+    # One cell's <Configure>: size it to its wrapped display-line count at
+    # the width grid just gave it. Setting -height resizes only the cell's
+    # row (a height-only Configure re-measures the same count and the no-op
+    # guard ends it), never $Text, so the chain terminates.
+    method table_cell_height {c} {
+        if {![winfo exists $c]} return
+        set dl [$c count -update -displaylines 1.0 end]
+        if {$dl < 1} { set dl 1 }
+        if {[$c cget -height] != $dl} { $c configure -height $dl }
+    }
+
+    # Re-fit every realized table, debounced to one idle pass: <Configure>
+    # fires per pixel through a sash drag, and each fit walks every cell.
+    method tables_refit {} {
+        if {$TblRefitTok ne ""} { my forget $TblRefitTok }
+        set TblRefitTok [my later idle [list [self] tables_refit_run]]
+    }
+    method tables_refit_run {} {
+        set TblRefitTok ""
+        dict for {id t} $Tables {
+            if {[winfo exists [dict get $t frame]]} { my table_fit $id }
+        }
+    }
+
+    # Search over the tables' recorded plain text: the widget-side $Text
+    # search cannot see into an embedded window. One hit per table per term -
+    # the jump target is the whole table (the spotlight), so finer hits
+    # would be indistinguishable duplicates. Returns {mark excerpt} pairs in
+    # document order (ids are issued in emit order).
+    method table_scan {needle nocase} {
+        set out [list]
+        if {$needle eq ""} { return $out }
+        set n [expr {$nocase ? [string tolower $needle] : $needle}]
+        foreach id [lsort -integer [dict keys $Tables]] {
+            set hit ""
+            foreach row [dict get $Tables $id flat] {
+                foreach cell $row {
+                    set hay [expr {$nocase ? [string tolower $cell] : $cell}]
+                    if {[string first $n $hay] >= 0} { set hit $cell; break }
+                }
+                if {$hit ne ""} break
+            }
+            if {$hit eq ""} continue
+            set lab [regsub -all {\s+} [string trim $hit] " "]
+            if {[string length $lab] > 60} { set lab "[string range $lab 0 59]…" }
+            lappend out [list tbl#m$id $lab]
+        }
+        return $out
+    }
+
+    # Light the table a jump landed on, dropping any previous spotlight. The
+    # frame's background - the gridline colour - flips to the find tint, so
+    # the whole table reads outlined and grid-lined as the hit, the embedded
+    # counterpart of the find tag's range highlight. Every reveal routes
+    # through here with its target index; a non-table index only clears.
+    # Order matters at the jump: lit is set before the see, so a first
+    # realization triggered by it paints lit at birth.
+    method table_spotlight {idx} {
+        set id ""
+        regexp {^tbl#m(\d+)$} $idx -> id
+        if {$LitTable ne "" && $LitTable ne $id} {
+            dict set Tables $LitTable lit 0
+            set f [dict get $Tables $LitTable frame]
+            if {[winfo exists $f]} {
+                $f configure -background [::questlog::ui::theme::c faint]
+            }
+            set LitTable ""
+        }
+        if {$id eq "" || ![dict exists $Tables $id]} return
+        dict set Tables $id lit 1
+        set LitTable $id
+        set f [dict get $Tables $id frame]
+        if {[winfo exists $f]} {
+            $f configure -background [::questlog::ui::theme::c find]
+        }
+    }
+
+    # Show the table's ⧉ while the pointer is over it. Crossing frame-to-cell
+    # fires <Leave> like any parent-to-child boundary, so the hide defers to
+    # idle and keeps the button while the pointer sits anywhere in the
+    # frame's subtree - copy_leave's pattern, widened by the path-prefix test.
+    method table_hover_enter {id} {
+        if {![dict exists $Tables $id]} return
+        set f [dict get $Tables $id frame]
+        if {![winfo exists $f.copy]} return
+        place $f.copy -in $f -relx 1.0 -x -2 -y 2 -anchor ne
+        raise $f.copy
+    }
+    method table_hover_leave {id} {
+        my later idle [list [self] table_hover_check $id]
+    }
+    method table_hover_check {id} {
+        if {![dict exists $Tables $id]} return
+        set f [dict get $Tables $id frame]
+        if {![winfo exists $f]} return
+        set w [winfo containing {*}[winfo pointerxy $f]]
+        if {$w eq $f || [string first $f. $w] == 0} return
+        place forget $f.copy
+    }
+
+    # The table ⧉'s action: the table as GFM markdown, reconstructed from the
+    # payload (the raw source line is not retained anywhere). ✓ acknowledges,
+    # per table, as on the message button.
+    method table_copy {id} {
+        if {![dict exists $Tables $id]} return
+        my clipboard_set \
+            [::questlog::ui::table_to_markdown [dict get $Tables $id payload]]
+        set f [dict get $Tables $id frame]
+        if {![winfo exists $f.copy]} return
+        set tok [dict get $Tables $id fbtok]
+        if {$tok ne ""} { my forget $tok }
+        $f.copy configure -text "✓"
+        dict set Tables $id fbtok [my later 700 [list [self] table_copy_reset $id]]
+    }
+    method table_copy_reset {id} {
+        if {![dict exists $Tables $id]} return
+        dict set Tables $id fbtok ""
+        set f [dict get $Tables $id frame]
+        if {[winfo exists $f.copy]} { $f.copy configure -text "⧉" }
+    }
+
+    # Destroy every table widget and drop the registry. Runs ahead of the
+    # base reset's `delete 1.0 end`, which unmaps embedded windows but never
+    # destroys the widgets behind them - without this, every reload would
+    # leak the previous document's frames. Ids restart, so widget paths and
+    # bindtags recycle instead of growing without bound.
+    method tables_clear {} {
+        if {[info exists Tables]} {
+            dict for {id t} $Tables {
+                set tok [dict get $t fbtok]
+                if {$tok ne ""} { my forget $tok }
+                catch {destroy [dict get $t frame]}
+                catch {$Text mark unset [dict get $t mark]}
+            }
+        }
+        set Tables [dict create]
+        set TableSeq 0
+        set LitTable ""
+        set TableHitLabel [dict create]
+    }
+
+    method reset {} {
+        my tables_clear
+        next
+    }
+
     # Scroll the reading view to a jsonl line. A directly mapped line (a turn
     # that rendered a text body) is shown as-is. A line with no anchor falls
     # back to the nearest mapped line at or before it: tool-use-only turns
@@ -1714,6 +2168,29 @@ oo::class create ::questlog::ui::Viewer {
     # for a family word or version number must never light every chip.
     method find_chrome_tags {} { return [list stub foldglyph modelchip] }
 
+    # Ctrl-F reaches the tables too: the base collects over the widget, which
+    # cannot see into an embedded window, so append the table hits and
+    # restore document order (marks and bare indices compare alike).
+    method collect_matches {pattern} {
+        set res [next $pattern]
+        if {$pattern eq ""} { return $res }
+        set thit [my table_scan $pattern 1]
+        if {![llength $thit]} { return $res }
+        foreach hit $thit {
+            lassign $hit m lab
+            dict set TableHitLabel $m $lab
+            lappend res $m
+        }
+        return [lsort -command [list [self] cmp_index] $res]
+    }
+
+    # Drop the spotlight with the find state: the lit frame is the table
+    # counterpart of the find tag the base clears.
+    method find_clear {} {
+        my table_spotlight ""
+        next
+    }
+
     # Re-fill the Matches band and the head-strip count from the current
     # FindMatches (a Ctrl-F recollect, not a search): rebuild the parallel
     # per-match excerpts in document order, then hand to refresh_match_control,
@@ -1738,6 +2215,8 @@ oo::class create ::questlog::ui::Viewer {
     # FindMatches/FindCur with the Ctrl-F overlay, so stepping is unified.
     method index_matches {query} {
         $Text tag remove find 1.0 end
+        my table_spotlight ""
+        set TableHitLabel [dict create]
         set FindMatches [list]
         set FindCur -1
         set MatchLabels [list]
@@ -1776,6 +2255,18 @@ oo::class create ::questlog::ui::Viewer {
                 if {$chrome} continue
                 $Text tag add find $m "$m + ${len}c"
                 lappend positions $m
+            }
+            # Table hits ride the same per-term list as widget hits, re-sorted
+            # into document order (the widget loop emitted its own in order,
+            # so sorting is only owed when a table matched).
+            set thit [my table_scan $term $nocase]
+            if {[llength $thit]} {
+                foreach hit $thit {
+                    lassign $hit m lab
+                    dict set TableHitLabel $m $lab
+                    lappend positions $m
+                }
+                set positions [lsort -command [list [self] cmp_index] $positions]
             }
             if {[llength $positions] > 0} { lappend per_term $positions }
             if {[::questlog::debug::enabled]} {
@@ -1824,6 +2315,11 @@ oo::class create ::questlog::ui::Viewer {
     # A one-line, whitespace-collapsed excerpt of the match's line, for the
     # match index row.
     method match_context {idx} {
+        # A table match excerpts from its recorded cell text: the widget
+        # holds only the window char at that mark, nothing to read.
+        if {[string match tbl#m* $idx]} {
+            return [dict getdef $TableHitLabel $idx ""]
+        }
         # A hit on a record's first line would excerpt the role label too, and
         # the row already leads with the role - "ASSISTANT · ...ASSISTANT
         # Write(" read twice. Start the excerpt where the content does: past
