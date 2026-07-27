@@ -397,11 +397,10 @@ oo::class create ::streamtree::StreamTree {
         set Text $Top.body.t
         # Re-pin the metadata columns and re-fit the subject ellipsis on resize.
         bind $Text <Configure> [list [self] on_text_configure %w]
-        # This is an object list, not editable text, so the Text class's
-        # bindings do not apply to it and the class bindtag comes off. Taking
-        # the tag out is what disarms the class without disarming the host: a
-        # widget-level `break` aborts the whole chain, so it would carry off
-        # the host toplevel's own accelerators too.
+        # This is an object list, not editable text, so the Text class bindtag
+        # comes off, which disarms the class without disarming the host. A
+        # widget-level `break` would not: break aborts the whole dispatch
+        # chain, carrying off the host toplevel's own accelerators with it.
         #
         # The class's mouse half starts a text selection on a click, which
         # grabs the X PRIMARY clipboard and runs tk::TextAutoScan, the
