@@ -79,7 +79,7 @@ A hook body works with its nodes through the store accessors, part of the subcla
 
 ## OPTIONS
 
-The streamtree base class takes its host-specific look and services as options, set through `configure` before the body is built, so its body holds no host references:
+The base class takes its host-specific look and services as options, set through `configure` before the body is built, so its body holds no host references:
 
 | Option | Default | Purpose |
 |---|---|---|
@@ -96,7 +96,7 @@ Set the `STREAMTREE_AUDIT` environment variable and every primitive checks the p
 
 ## PERFORMANCE
 
-Measured July 2026 (medians of 3, min-max in parentheses) on an AMD Ryzen 7 5800X under Xvfb software rendering, Tcl/Tk 9.0.1. The numbers are for the base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
+Measured July 2026 (medians of 3, min-max in parentheses) on an AMD Ryzen 7 5800X under Xvfb software rendering, Tcl/Tk 9.0.1. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
 
 | scenario | N | median (min-max) | per row | notes |
 |---|---|---|---|---|
@@ -115,6 +115,8 @@ The base class renders every visible row into the text widget (no virtualization
 
 To a screen reader the widget presents as one text area, not a tree of rows and columns; assistive-technology structure (row navigation, expansion state) is not exposed. Cell editing, checkbox columns, and type-ahead are not built in; a host can assemble them from embedded windows, row tags, and key bindings.
 
+The list text does not carry the Text class bindtag, because an object list wants none of what that class does: its click gestures start a text selection and its motion keys scroll to an insert mark a list never maintains. The class's wheel scripts are kept. A host's own bindings go on the row tags, the widget, or the toplevel, all of which still run.
+
 ## DECLARATIVE ATTRIBUTES
 
 A consumer declares attributes on its rows: an id, a kind (bool or enum), a
@@ -132,7 +134,7 @@ header carries the full contract.
 Filter kinds past bool and enum. A consumer will one day want a scalar
 threshold (a numeric column above some value) or a free-text match as a
 filter. What the control looks like, how a threshold is typed, and whether
-text matching belongs in the base class at all are undecided; the kind field
+text matching belongs in a tree widget at all are undecided; the kind field
 in the declaration is the extension point when the design round happens.
 
 ## REQUIREMENTS

@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require leash
-package provide streamtree 0.3.1
+package provide streamtree 0.3.2
 
 namespace eval ::streamtree {}
 
@@ -397,28 +397,39 @@ oo::class create ::streamtree::StreamTree {
         set Text $Top.body.t
         # Re-pin the metadata columns and re-fit the subject ellipsis on resize.
         bind $Text <Configure> [list [self] on_text_configure %w]
-        # This is a list, not editable text: make the click-drag text selection
-        # invisible (it otherwise paints rows grey, active and inactive) and
-        # hide the insert cursor.
+        # This is an object list, not editable text, so the Text class's
+        # bindings do not apply to it and the class bindtag comes off. Taking
+        # the tag out is what disarms the class without disarming the host: a
+        # widget-level `break` aborts the whole chain, so it would carry off
+        # the host toplevel's own accelerators too.
+        #
+        # The class's mouse half starts a text selection on a click, which
+        # grabs the X PRIMARY clipboard and runs tk::TextAutoScan, the
+        # self-scrolling drag-select. Its keyboard half is quieter and reaches
+        # further: every motion key it defines (the arrows, Home, End, Prior,
+        # Next, and the Control-key twins Tk adds while tk_strictMotif is off)
+        # ends in tk::TextSetCursor, which does `see insert`. A list's insert
+        # mark sits wherever the last render left it, normally the buffer end,
+        # so any one of those keys scrolls the reader off to the end of the
+        # tree. -state disabled is no guard: it refuses edits, while mark set
+        # and see keep working on a disabled widget.
+        #
+        # The wheel is the one class binding a list wants. Its scripts are
+        # copied onto a tag of this module's own rather than restated, so they
+        # stay whatever the running Tk says they are.
+        foreach ev [lsearch -all -inline -glob [bind Text] *MouseWheel*] {
+            bind StreamtreeWheel $ev [bind Text $ev]
+        }
+        bindtags $Text [list $Text StreamtreeWheel [winfo toplevel $Text] all]
+        bind $Text <B1-Motion> [my opt motioncb]
+        # A list has no insert cursor: hide it, and blank the text-selection
+        # colours so a `sel` range a host leaves behind never paints rows grey.
         $Text configure -insertwidth 0 -inactiveselectbackground "" \
             -selectbackground [$Text cget -background] \
             -selectforeground [$Text cget -foreground]
 
         $Text mark set TailMark "end-1c"
         $Text mark gravity TailMark right
-
-        # This is an object list, not editable text. Block the Text class's
-        # selection gestures so a click never starts a text selection (which
-        # would grab the X PRIMARY clipboard and, via tk::TextAutoScan, run a
-        # self-scrolling drag-select). The per-tag click/drag bindings fire
-        # first; these widget-level breaks stop the class bindings that follow.
-        # B1-Motion still drives the host's motion callback, then breaks the
-        # class handler (an empty callback just breaks, blocking selection).
-        bind $Text <B1-Motion> "[my opt motioncb]; break"
-        foreach ev {<Button-1> <Double-Button-1> <Triple-Button-1> \
-                    <Shift-Button-1> <Control-Button-1> <B1-Leave>} {
-            bind $Text $ev break
-        }
     }
 
     # Text widget yview update: forward to the scrollbar, and edge-detect the
