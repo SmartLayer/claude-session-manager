@@ -84,7 +84,7 @@ proc commit {} {
 
 set ::Published [$TB snapshot]
 type 5
-check typed_floor_is_not_published 2 [dict get [$TB snapshot] min_turns]
+check typed_floor_is_not_published 2 [dict get [$TB snapshot] turns_view]
 check and_the_spinbox_shows_what_was_typed 5 [$SB get]
 
 # ---- rule 2: a redraw elsewhere in the bar leaves it standing ---------------
@@ -94,7 +94,7 @@ check and_the_spinbox_shows_what_was_typed 5 [$SB get]
 $TB begin_edit pattern
 update
 check typed_floor_survives_a_tail_reveal 5 [$SB get]
-check and_it_is_still_unpublished 2 [dict get [$TB snapshot] min_turns]
+check and_it_is_still_unpublished 2 [dict get [$TB snapshot] turns_view]
 
 # A whole-model write from outside (here the cut banner's widen escape, dropping
 # the since bound) redraws the bar top to bottom. min turns did not move, so the
@@ -107,8 +107,8 @@ check the_widen_took_effect all [dict get [$TB snapshot] since]
 # ---- the commit still commits ----------------------------------------------
 
 commit
-check committed_floor_is_published 5 [dict get [$TB snapshot] min_turns]
-check and_it_reached_the_subscriber 5 [dict get $::Published min_turns]
+check committed_floor_is_published 5 [dict get [$TB snapshot] turns_view]
+check and_it_reached_the_subscriber 5 [dict get $::Published turns_view]
 check and_the_spinbox_still_shows_it 5 [$SB get]
 
 # ---- and a floor the MODEL moves still reaches the spinbox ------------------
@@ -119,7 +119,7 @@ check and_the_spinbox_still_shows_it 5 [$SB get]
 
 $TB widen min_turns
 update
-check widen_clears_the_floor 1 [dict get [$TB snapshot] min_turns]
+check widen_clears_the_floor 1 [dict get [$TB snapshot] turns_view]
 check and_the_spinbox_follows_the_model 1 [$SB get]
 
 # A typed value out of range is clamped on commit, not on the way in: the cap is
@@ -127,7 +127,7 @@ check and_the_spinbox_follows_the_model 1 [$SB get]
 # the number that was refused.
 type 99
 commit
-check out_of_range_commit_is_clamped 9 [dict get [$TB snapshot] min_turns]
+check out_of_range_commit_is_clamped 9 [dict get [$TB snapshot] turns_view]
 check and_the_field_shows_the_clamp 9 [$SB get]
 
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]

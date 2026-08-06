@@ -160,12 +160,13 @@ proc ::questlog::search::build_clauses {snapshot} {
         }
         if {[llength $ornodes] > 0} { lappend andnodes [::questlog::match::tnode_or $ornodes] }
     }
-    # turn_count_cap rides on the clause dict so scan_file caps a search row's
-    # nturns exactly as a browse row's, even in a worker that cannot read config.
+    # The extraction caps ride on the clause dict so scan_file shapes a search
+    # row exactly as a browse row, even in a worker that cannot read config.
     return [dict create leaves $leaves \
         tree [::questlog::match::tnode_and $andnodes] \
         nocase [expr {!$search_case}] \
-        turn_count_cap [::questlog::config::get turn_count_cap]]
+        turn_count_cap [::questlog::config::get turn_count_cap] \
+        first_user_cap [::questlog::config::get first_user_cap]]
 }
 
 proc ::questlog::search::trim_values {vs} {

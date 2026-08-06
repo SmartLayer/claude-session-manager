@@ -1,15 +1,14 @@
 #!/usr/bin/env wish9.0
-# The folder heading under a list filter reads as one statement: the count,
-# the size and the cost all describe the rows the list is showing. The model
-# sum (folder_totals, the reversibility anchor test-toggle-reversible pins)
-# stays whole; the heading's cells ask for the shown-only sum (folder_totals
-# $f 1), and the count reads "(N of M)" with M the model count - so the
-# hidden count is the per-folder derivation M - N over the loaded nodes.
-# That derivation is exercised for each of the three filters in turn,
-# the model filter included: it hides loaded rows like the other two even
-# though member_filters excludes it (it claims no membership outside the
-# list), which is why the list-global FilterNote goes blank under it while
-# the heading still accounts for every row.
+# The folder heading's money and bytes are true sums over every stored row,
+# hidden included, so the heading answers what the project spent in the
+# window whatever a list filter is showing; only the COUNT narrows to the
+# shown rows, reading "(N of M)" with M the model count - the hidden count
+# is the per-folder derivation M - N over the loaded nodes. That derivation
+# is exercised for each of the three filters in turn, the model filter
+# included: it hides loaded rows like the other two even though
+# member_filters excludes it (it claims no membership outside the list),
+# which is why the list-global FilterNote goes blank under it while the
+# heading still accounts for every row.
 
 package require Tcl 9
 package require Tk
@@ -137,9 +136,10 @@ $SL attr_filter_set bookmarked 1
 update
 check "bookmarked: visible count" [$SL folder_visible_count $FOLDER] 1
 check "bookmarked: count reads shown of total" [counts] "1 of 3"
-check "bookmarked: size cell sums B alone" [cell size] [$SL fmt_size $sz($Bp)]
-check "bookmarked: cost cell sums B alone" [cell cost] \
-    [::questlog::cost::format_usd $cost($Bp)]
+check "bookmarked: size cell stays the whole sum" [cell size] \
+    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
+check "bookmarked: cost cell stays the whole sum" [cell cost] \
+    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
 check "bookmarked: hidden = model count - visible" [hidden] 2
 $SL attr_filter_set bookmarked 0
 update
@@ -149,10 +149,10 @@ $SL attr_filter_set model [list [::questlog::cost::model_label claude-opus-4-8]]
 update
 check "model: visible count" [$SL folder_visible_count $FOLDER] 2
 check "model: count reads shown of total" [counts] "2 of 3"
-check "model: size cell sums the shown rows" [cell size] \
-    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp)}]]
-check "model: cost cell sums the shown rows" [cell cost] \
-    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp)}]]
+check "model: size cell stays the whole sum" [cell size] \
+    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
+check "model: cost cell stays the whole sum" [cell cost] \
+    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
 check "model: hidden = model count - visible" [hidden] 1
 $SL attr_filter_set model [list]
 update
@@ -163,9 +163,10 @@ $SL attr_filter_set running 1
 update
 check "running: visible count" [$SL folder_visible_count $FOLDER] 1
 check "running: count reads shown of total" [counts] "1 of 3"
-check "running: size cell sums A alone" [cell size] [$SL fmt_size $sz($Ap)]
-check "running: cost cell sums A alone" [cell cost] \
-    [::questlog::cost::format_usd $cost($Ap)]
+check "running: size cell stays the whole sum" [cell size] \
+    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
+check "running: cost cell stays the whole sum" [cell cost] \
+    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
 check "running: hidden = model count - visible" [hidden] 2
 $SL attr_filter_set running 0
 $SL reconcile_running [dict create]

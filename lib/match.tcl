@@ -45,14 +45,19 @@ proc ::questlog::match::clean_text {s {limit -1}} {
     return $s
 }
 
-# Collapse whitespace and strip simple JSON escapes from a first-prompt preview.
-# Uncapped: the session list renders the preview with -wrap none and clips it to
-# the subject column, so a byte cap here would only be a worse approximation of
-# the same clipping.
-proc ::questlog::match::clean_preview {s} {
+# Collapse whitespace and strip simple JSON escapes from a first-prompt
+# preview, capped at limit characters (0 = uncapped). The session list clips
+# the preview to the subject column at render, far below any real cap; the
+# cap bounds what a stored row holds when a pasted prompt opens the session,
+# since the store keeps every in-window row. The limit rides in like the
+# clause dict's other extraction caps rather than the display-caps snapshot,
+# so a caller without config in reach stays whole.
+proc ::questlog::match::clean_preview {s {limit 0}} {
     set s [regsub -all {[\s]+} $s " "]
     set s [string map [list "\\\"" "\"" "\\\\" "\\" "\\n" " " "\\t" " "] $s]
-    return [string trim $s]
+    set s [string trim $s]
+    if {$limit > 0} { set s [string range $s 0 [expr {$limit - 1}]] }
+    return $s
 }
 
 # Session origin from a single opening-record line: an sdk-cli spawn (a skill or
@@ -773,7 +778,8 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
         first_ts $first_ts \
         nturns [expr {$cap > 0 ? min($users, $cap) : $users}] \
         kind [expr {$kind eq "" ? "cli" : $kind}] \
-        first_user [::questlog::match::clean_preview $first_user] \
+        first_user [::questlog::match::clean_preview $first_user \
+            [dict getdef $clauses first_user_cap 0]] \
         slug $slug \
         ai_title $ai_title \
         has_subagents $has_sub \

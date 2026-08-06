@@ -37,6 +37,9 @@ namespace eval ::questlog::ui::app {
     variable SearchFlushTimer ;# after-id of the pending search-render flush, or ""
     variable ScanPending      ;# browse rows buffered for an idle sliced flush
     variable ScanFlushTimer   ;# after-id of the pending scan-render flush, or ""
+    variable DeferredCost     ;# hidden rows' cost jobs, posted once the visible
+                              ;# queue drains: the pool is FIFO, so post order
+                              ;# is priority order and shown rows price first
     variable CostEpoch        ;# Epoch to drop stale results after a filter change
     variable StatusMode       ;# browse|scanning|searching|search_done|search_cancelled
     variable SearchSummary    ;# persistent terminal search line, "" when no criteria active
@@ -102,6 +105,7 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     set SearchFlushTimer ""
     set ScanPending [list]
     set ScanFlushTimer ""
+    set DeferredCost [list]
     set CostEpoch 0
 
     # The <<ContextMenu>> virtual event already covers Button-2 on Aqua and
@@ -499,7 +503,7 @@ proc ::questlog::ui::app::on_folder_bound {folder} {
 # publishes. Two publishes equal across all of them changed nothing that decides
 # which sessions load, so on_filter can skip the rebuild.
 proc ::questlog::ui::app::bounds_equal {a b} {
-    foreach k {search search_case search_regions file tool pattern subtree since until min_turns} {
+    foreach k {search search_case search_regions file tool pattern subtree since until} {
         if {[dict getdef $a $k {}] ne [dict getdef $b $k {}]} { return 0 }
     }
     return 1
@@ -520,10 +524,15 @@ proc ::questlog::ui::app::on_filter {snapshot} {
 
     # A republish whose bounds and search keys all match the last one changed
     # nothing that decides which sessions load, so the rebuild below would only
-    # reproduce what is already shown. Skip it, keeping the list and its selection.
-    # The list-view filters do not ride the snapshot: they live on the list strip
-    # and re-filter the loaded rows in place, telling the app through on_filter_change.
+    # reproduce what is already shown. Skip it, keeping the list and its
+    # selection; the turns floor is a view key, so its move re-derives the
+    # view over the loaded rows in place, no rescan. The list-strip filters
+    # do not ride the snapshot at all: they re-filter in place through
+    # on_filter_change.
     if {$PrevSnapshot ne {} && [bounds_equal $PrevSnapshot $snapshot]} {
+        if {[dict getdef $snapshot turns_view 1] != [dict getdef $PrevSnapshot turns_view 1]} {
+            $SessionList set_turns_view [dict getdef $snapshot turns_view 1]
+        }
         set PrevSnapshot $snapshot
         return
     }
@@ -608,6 +617,7 @@ proc ::questlog::ui::app::flush_scan {{slice 1}} {
     variable PrevSnapshot
     variable ScanPending
     variable ScanFlushTimer
+    variable DeferredCost
     if {$ScanFlushTimer ne ""} { after cancel $ScanFlushTimer; set ScanFlushTimer "" }
     if {[llength $ScanPending] == 0} return
     set slice_ms [expr {$slice ? [::questlog::config::get scan_render_slice_ms] : 0}]
@@ -626,7 +636,13 @@ proc ::questlog::ui::app::flush_scan {{slice 1}} {
             set path [dict get $row path]
             if {![dict exists $row cost_usd] && [$SessionList has_session $path] \
                 && [$SessionList sget $path cost] eq ""} {
-                start_cost_one $path
+                if {[$SessionList sflag $path hidden]} {
+                    # A hidden row's cost feeds only the aggregates, so it
+                    # waits for the visible queue to drain.
+                    lappend DeferredCost $path
+                } else {
+                    start_cost_one $path
+                }
             }
         }
         if {$slice_ms > 0 && [clock milliseconds] >= $deadline} break
@@ -813,6 +829,7 @@ proc ::questlog::ui::app::on_scan_done {scanned} {
     # every row's cwd_hint, so residence is answerable now, and a row admitted
     # on its own cwd_hint that residence contradicts is dropped.
     if {[llength [dict getdef $PrevSnapshot subtree {}]] > 0} { restamp_subtree }
+    drain_deferred_cost
     set ScanActive 0
     $SessionList scan_end
     if {![::questlog::ui::any_criteria $PrevSnapshot]} { set StatusMode browse }
@@ -1345,10 +1362,23 @@ proc ::questlog::ui::app::start_cost_one {path} {
 proc ::questlog::ui::app::cancel_cost {} {
     variable CostEpoch
     variable CostOutstanding
+    variable DeferredCost
     incr CostEpoch
     set CostOutstanding 0
+    set DeferredCost [list]
     if {[::questlog::jobpool::available]} { ::questlog::jobpool::bump cost }
     update_spinner
+}
+
+# Post the hidden rows' cost jobs held back while visible rows priced. Fired
+# when the visible queue drains (the counter reaching 0) and at scan end.
+proc ::questlog::ui::app::drain_deferred_cost {} {
+    variable CostOutstanding
+    variable DeferredCost
+    if {$CostOutstanding > 0 || [llength $DeferredCost] == 0} return
+    set held $DeferredCost
+    set DeferredCost [list]
+    foreach path $held { start_cost_one $path }
 }
 
 proc ::questlog::ui::app::on_cost_worker_result {path epoch result} {
@@ -1358,6 +1388,7 @@ proc ::questlog::ui::app::on_cost_worker_result {path epoch result} {
     # Decrement for every live-epoch reply, success or failure, before the ok
     # gate, so a failed cost parse still retires its job and the counter drains.
     if {$CostOutstanding > 0} { incr CostOutstanding -1 }
+    if {$CostOutstanding == 0} { drain_deferred_cost }
     update_spinner
     if {![dict get $result ok]} return
 

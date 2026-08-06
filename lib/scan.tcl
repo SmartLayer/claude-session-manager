@@ -500,12 +500,13 @@ oo::class create ::questlog::Scan {
     }
 
     # The empty clause set that makes scan_file the browse extractor, with the
-    # two caps stamped on (a worker cannot reach config; scan_one reads them
-    # from the clause dict for the same reason).
+    # extraction caps stamped on (a worker cannot reach config; scan_one reads
+    # them from the clause dict for the same reason).
     method browse_clauses {} {
         return [dict create leaves {} tree {t and nodes {}} nocase 1 \
             turn_count_cap  [::questlog::config::get turn_count_cap] \
-            tail_window_bytes [::questlog::config::get tail_window_bytes]]
+            tail_window_bytes [::questlog::config::get tail_window_bytes] \
+            first_user_cap  [::questlog::config::get first_user_cap]]
     }
 
     # Arrival rows from a poll's chunk job: publish straight through - no
@@ -716,14 +717,11 @@ oo::class create ::questlog::Scan {
     # clause set is the browse signal - scan_file then stops its forward pass
     # early (turn_count_cap turns, cwd, first_ts in hand) and reads the title from
     # a tail window, the same fast browse read this method used to carry inline,
-    # so a large transcript is not read end to end just to list it. The two caps
-    # ride in on the clause dict because scan_file reads them from there (a search
-    # worker cannot reach config); here config is in hand, so they are stamped on.
+    # so a large transcript is not read end to end just to list it. The caps
+    # ride in on the clause dict (browse_clauses) because scan_file reads them
+    # from there (a search worker cannot reach config).
     method scan_one {path} {
-        set clauses [dict create leaves {} tree {t and nodes {}} nocase 1 \
-            turn_count_cap  [::questlog::config::get turn_count_cap] \
-            tail_window_bytes [::questlog::config::get tail_window_bytes]]
-        lassign [::questlog::match::scan_file $path $clauses] row _
+        lassign [::questlog::match::scan_file $path [my browse_clauses]] row _
         if {$row eq ""} { return [dict create] }
         return $row
     }

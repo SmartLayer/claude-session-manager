@@ -50,7 +50,7 @@ check "the snapshot has no view-filter key" 0 [dict exists $snap listview]
 check "it publishes the search key" 1 [dict exists $snap search]
 check "it publishes the bounds keys" {1 1 1 1} \
     [list [dict exists $snap subtree] [dict exists $snap file] \
-          [dict exists $snap since] [dict exists $snap min_turns]]
+          [dict exists $snap since] [dict exists $snap turns_view]]
 
 # ---- search and bounds controls publish -----------------------------------------
 

@@ -72,7 +72,7 @@ check "and the heading counts them, and only them, as three" \
 
 # The window and floor still hold their seeded value; they simply do not count.
 check "the standing window is still in force" 7d [dict get [$TB snapshot] since]
-check "and the turn floor is too" 2 [dict get [$TB snapshot] min_turns]
+check "and the turn floor is too" 2 [dict get [$TB snapshot] turns_view]
 
 # ---- the design's words on the folder row and the model filter ---------------
 

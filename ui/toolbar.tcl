@@ -38,9 +38,13 @@ package require searchfield
 #   tool             list of {name key} pairs (key matches the invocation text;
 #                    empty key = any use of the tool)
 #   pattern          list of regex strings   (case-sensitive, always)
-#   min_turns        the minimum-turns bounds floor (1 = include all). A bounds
-#                    filter alongside since/subtree: a session below the floor leaves
-#                    the corpus, not just the view - see lib/scan.tcl.
+#   turns_view       the minimum-turns view floor (1 = show all). A view key,
+#                    not a bound: every in-window session is scanned, stored,
+#                    priced and counted in the totals; a session below the
+#                    floor is hidden from the list, and moving the floor
+#                    re-derives the view in place with no rescan. The CLI's
+#                    min_turns bound (lib/scan.tcl row_in_bounds) is separate
+#                    and still cuts the corpus there.
 #   cwd              launch cwd, constant after startup
 #
 # The view filters (running, bookmarked, model) are not here: they live
@@ -590,7 +594,7 @@ oo::class create ::questlog::ui::Toolbar {
             file           [dict get $m file] \
             tool           [dict get $m tool] \
             pattern        [dict get $m pattern] \
-            min_turns      [my turns_value] \
+            turns_view     [my turns_value] \
             cwd            $Cwd]
     }
 

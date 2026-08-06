@@ -174,11 +174,14 @@ namespace eval ::questlog::config {
     dict set Config snippet_lead  16
     dict set Config snippet_trail 144
     # Length caps for displayed strings: a matched content block, a rendered
-    # tool call, and one tool parameter value. The first-prompt preview is left
-    # uncapped; the session list clips it to the subject column at render.
+    # tool call, and one tool parameter value.
     dict set Config content_cap     300
     dict set Config tool_render_cap 250
     dict set Config tool_param_cap  60
+    # Characters of the first-prompt preview a row STORES. The list clips the
+    # preview to the subject column at render, far below this; the cap bounds
+    # what several thousand stored rows hold when a pasted prompt opens one.
+    dict set Config first_user_cap  512
     # Snippets shown per matching session card.
     dict set Config snippets_per_session 3
     # Snippets shown per matching subagent (a session's child rows). Lower than

@@ -115,7 +115,7 @@ oo::class create ::questlog::ui::SessionList {
     variable FilterMembers    ;# dict uuid -> {path ?cwd?}: what the active filters jointly claim
     variable FilterNote       ;# the status line's filter clause, "" when no filter or no membership
     variable CutMembers       ;# the members with no loaded row, as {path ?cwd? resolved} dicts
-    variable CutReason        ;# the criterion that cut them: subtree|search|since|min_turns|""
+    variable CutReason        ;# the criterion that cut them: subtree|search|since|""
     variable Pinned           ;# dict sid -> 1: sessions the reader pulled in past the search
     variable ViewRebuildTimer ;# after-id of the debounced hidden-aware rebuild, or ""
     variable InBatch          ;# 1 between begin_batch and end_batch: row methods
@@ -123,6 +123,9 @@ oo::class create ::questlog::ui::SessionList {
                               ;# resort) to the batch instead of paying it per row
     variable DirtyHeadings    ;# dict folder -> 1: headings whose aggregates moved
                               ;# during the open batch, redrawn once at its close
+    variable TurnsView        ;# the toolbar's turns floor as a view filter: a
+                              ;# session with nturns below it is hidden, never
+                              ;# excluded - it stays stored, priced and counted
     variable Query            ;# {terms <list> nocase 0|1} for hit highlighting
     variable HitTags
     # Domain indices into the node store: a folder name or a session/subagent
@@ -192,6 +195,7 @@ oo::class create ::questlog::ui::SessionList {
         set ViewRebuildTimer ""
         set InBatch 0
         set DirtyHeadings [dict create]
+        set TurnsView 1
         set Query [dict create terms [list] nocase 0]
         set SelectedSet [dict create]
         set SelectAnchor ""
@@ -721,10 +725,39 @@ oo::class create ::questlog::ui::SessionList {
 
     method apply_filter {snapshot} {
         set Snapshot $snapshot
+        set TurnsView [dict getdef $snapshot turns_view 1]
         # The arriving snapshot is search and bounds only; the base class owns
         # the filters and holds them across the change, so a refill honours a filter
         # still pressed on the strip with nothing here to re-graft.
         my clear
+    }
+
+    # The turns floor moved with everything else equal: re-derive every hidden
+    # flag over the loaded rows and rebuild, no rescan. The floor is a view
+    # key (ui/toolbar.tcl): a below-floor session stays in the store, priced
+    # and counted, and only its rendering is suppressed - which is what keeps
+    # the folder sums and the grand total true sums over the window.
+    method set_turns_view {n} {
+        set TurnsView $n
+        my apply_attr_filters
+    }
+
+    # 1 unless a session node's recorded turn count sits below the view floor.
+    # An empty nturns admits (a row that somehow lacks one, mirroring the CLI
+    # bound's default); non-session nodes are never floored.
+    method turns_admits {node} {
+        if {$TurnsView <= 1} { return 1 }
+        if {[my node_field $node kind] ne "session"} { return 1 }
+        set nturns [my node_pget $node nturns]
+        if {$nturns eq ""} { return 1 }
+        return [expr {$nturns >= $TurnsView}]
+    }
+
+    # The one evaluator every hidden-flag derivation calls (the base class's
+    # attribute filters and this class's seven call sites alike), so the turns
+    # floor rides it rather than adding an eighth derivation.
+    method attr_admits {node} {
+        return [expr {[next $node] && [my turns_admits $node]}]
     }
 
     # Every distinct, non-empty model label in the list, sorted. Hidden rows
@@ -2341,6 +2374,7 @@ oo::class create ::questlog::ui::SessionList {
     # loaded rows exactly as the other two do, and a folder whose rows it all
     # hides must not go on reporting them.
     method any_view_toggle {} {
+        if {$TurnsView > 1} { return 1 }
         return [expr {[llength [::questlog::listfilter::active_filters [my attr_filter_all]]] > 0}]
     }
 
@@ -2381,17 +2415,18 @@ oo::class create ::questlog::ui::SessionList {
 
     # A folder's count/size/cost, summed from its member sessions' payloads at
     # ask time (issue #60): nothing is stored, so a move, forget or freshen
-    # cannot leave a heading's totals behind. shown=1 skips the rows a
-    # list-view toggle is hiding, so the heading's aggregates agree with its
-    # visible count.
+    # cannot leave a heading's totals behind. shown=1 narrows the COUNT to the
+    # rows no list-view toggle is hiding; money and bytes always sum every
+    # stored member, hidden included, so the heading answers what the project
+    # spent in the window whatever the view is showing.
     method folder_totals {folder {shown 0}} {
         set n 0; set sz 0; set cst 0.0
         foreach sid [my node_field [my fid $folder] children] {
-            if {$shown && [my node_field $sid hidden]} continue
-            incr n
             set sz [expr {$sz + [my node_pget $sid size 0]}]
             set c [my node_pget $sid cost]
             if {$c ne "" && $c > 0} { set cst [expr {$cst + $c}] }
+            if {$shown && [my node_field $sid hidden]} continue
+            incr n
         }
         return [dict create count $n size $sz cost $cst]
     }
@@ -3513,7 +3548,8 @@ oo::class create ::questlog::ui::SessionList {
     # they bind: the subtree bound is hard (even a running session outside it never
     # surfaces, see reconcile_running), then the content criteria (with a search
     # active the matches decide what loads, and a session with no hit is not among
-    # them), then the recency window, then the min-turns floor.
+    # them), then the recency window. The turns floor is not here: a view
+    # filter cuts nothing from the corpus.
     method cut_reason {member} {
         if {[dict getdef $member resolved ""] eq ""} { return none }
         set subtree [dict getdef $Snapshot subtree {}]
@@ -3522,7 +3558,6 @@ oo::class create ::questlog::ui::SessionList {
         }
         if {[::questlog::ui::any_criteria $Snapshot]} { return search }
         if {[::questlog::scan::cutoff_for $Snapshot] > 0} { return since }
-        if {[dict getdef $Snapshot min_turns 1] > 1} { return min_turns }
         return unloaded
     }
 
@@ -3671,7 +3706,6 @@ oo::class create ::questlog::ui::SessionList {
             subtree   { return "The folder bound excluded $it." }
             search    { return "Your search terms excluded $it." }
             since     { return "The time window excluded $it." }
-            min_turns { return "The min-turns floor excluded $it." }
             unloaded  { return "The search did not load $it." }
             default   { return "No transcript on disk to load yet." }
         }
@@ -3682,7 +3716,6 @@ oo::class create ::questlog::ui::SessionList {
             subtree   "Clear the folder bound"
             search    "Clear the search"
             since     "Clear the time window"
-            min_turns "Clear the min-turns floor"
         } $reason ""]
     }
 
