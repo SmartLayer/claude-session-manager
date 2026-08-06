@@ -452,7 +452,12 @@ oo::class create ::questlog::Scan {
         set PathsTotal [llength $paths]
         set Per [::questlog::config::get scan_chunk_files]
         set chunks [list]
-        for {set i 0} {$i < [llength $paths]} {incr i $Per} {
+        # The first chunk is deliberately small: chunk 0 gates the first paint
+        # (in-order release), so the first rows land after a handful of reads
+        # instead of a full-width chunk of the corpus's newest, largest files.
+        set first [expr {min(6, [llength $paths])}]
+        if {$first > 0} { lappend chunks [lrange $paths 0 [expr {$first - 1}]] }
+        for {set i $first} {$i < [llength $paths]} {incr i $Per} {
             lappend chunks [lrange $paths $i [expr {$i + $Per - 1}]]
         }
         set ChunksTotal [llength $chunks]

@@ -595,21 +595,24 @@ proc ::questlog::ui::app::on_filter {snapshot} {
 
 # ---- scan callbacks ----------------------------------------------------
 
-# Browse rows buffer here and render in idle-scheduled slices (the browse twin
-# of on_search_file/flush_search): a worker flood can outpace the widget, and
-# per-arrival rendering would hold the event loop for the flood's duration.
+# Browse rows buffer here and render in timer-scheduled slices (the browse
+# twin of on_search_file/flush_search): a worker flood can outpace the widget,
+# and per-arrival rendering would hold the event loop for the flood's
+# duration. The arm is a 0ms timer, not idle: worker arrivals are events,
+# which precede idle, so an idle-armed first paint starves behind the
+# arrival stream and drifts past the 1s gate.
 proc ::questlog::ui::app::on_scan_row {row} {
     variable ScanPending
     variable ScanFlushTimer
     lappend ScanPending $row
     if {$ScanFlushTimer eq ""} {
-        set ScanFlushTimer [after idle [namespace code flush_scan]]
+        set ScanFlushTimer [after 0 [namespace code flush_scan]]
     }
 }
 
 # Render the buffered browse rows in one batch bracket, stopping at the
-# scan_render_slice_ms wall-clock budget and re-arming at idle to finish, so
-# typing always preempts. slice 0 drains everything in one pass - the
+# scan_render_slice_ms wall-clock budget and re-arming to finish, so typing
+# always preempts between slices. slice 0 drains everything in one pass - the
 # synchronous callers (on_scan_path, on_scan_done) use it because their
 # contract is a store that is current when they return.
 proc ::questlog::ui::app::flush_scan {{slice 1}} {
@@ -650,7 +653,7 @@ proc ::questlog::ui::app::flush_scan {{slice 1}} {
     $SessionList end_batch
     set ScanPending [lrange $ScanPending $i end]
     if {[llength $ScanPending] > 0} {
-        set ScanFlushTimer [after idle [namespace code flush_scan]]
+        set ScanFlushTimer [after 0 [namespace code flush_scan]]
     }
 }
 

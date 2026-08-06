@@ -2396,9 +2396,11 @@ oo::class create ::questlog::ui::SessionList {
     # Grouping the render into one event-loop turn also keeps a flood of worker
     # results from churning the list while the user interacts.
     method refresh_cost_batch {batch} {
+        my begin_batch
         dict for {path cost_dict} $batch {
             my apply_cost $path $cost_dict
         }
+        my end_batch
         my refresh_status
     }
 
@@ -2433,7 +2435,7 @@ oo::class create ::questlog::ui::SessionList {
 
         # Heading and session line both re-lay through the item primitive,
         # which owns its own widget state, so this method holds none.
-        if {$delta != 0} { my redraw_folder_heading $folder }
+        if {$delta != 0} { my mark_heading_dirty $folder }
         if {[my sflag $path rendered]} { my redraw_header $path }
         # The worker result can change cost-, turns-, duration-, A/H- or
         # context-sorted order.
@@ -2482,7 +2484,7 @@ oo::class create ::questlog::ui::SessionList {
             set delta [expr {$new_cost - $old_cost}]
 
             $Text configure -state normal
-            if {$delta != 0} { my redraw_folder_heading $folder }
+            if {$delta != 0} { my mark_heading_dirty $folder }
             if {[my sflag $parent rendered]} {
                 my redraw_header $parent
             }
