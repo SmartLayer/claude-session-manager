@@ -35,6 +35,8 @@ namespace eval ::questlog::ui::app {
     variable CostFlushTimer   ;# after-id of the pending cost flush, or ""
     variable SearchPending    ;# list of per-file match lists buffered for an idle flush
     variable SearchFlushTimer ;# after-id of the pending search-render flush, or ""
+    variable ScanPending      ;# browse rows buffered for an idle sliced flush
+    variable ScanFlushTimer   ;# after-id of the pending scan-render flush, or ""
     variable CostEpoch        ;# Epoch to drop stale results after a filter change
     variable StatusMode       ;# browse|scanning|searching|search_done|search_cancelled
     variable SearchSummary    ;# persistent terminal search line, "" when no criteria active
@@ -66,6 +68,8 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     variable CostFlushTimer
     variable SearchPending
     variable SearchFlushTimer
+    variable ScanPending
+    variable ScanFlushTimer
     variable CostEpoch
     variable StatusMode
     variable SearchSummary
@@ -96,6 +100,8 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     set CostFlushTimer ""
     set SearchPending [list]
     set SearchFlushTimer ""
+    set ScanPending [list]
+    set ScanFlushTimer ""
     set CostEpoch 0
 
     # The <<ContextMenu>> virtual event already covers Button-2 on Aqua and
@@ -533,6 +539,7 @@ proc ::questlog::ui::app::on_filter {snapshot} {
     # per-file results and cancel a pending flush before the list is cleared, so
     # a stale session never renders into the fresh list.
     discard_search_buffer
+    discard_scan_buffer
     $SessionList apply_filter $snapshot
 
     # apply_filter wiped the store, so the scan re-streams the new bounds from
@@ -576,20 +583,65 @@ proc ::questlog::ui::app::on_filter {snapshot} {
 
 # ---- scan callbacks ----------------------------------------------------
 
+# Browse rows buffer here and render in idle-scheduled slices (the browse twin
+# of on_search_file/flush_search): a worker flood can outpace the widget, and
+# per-arrival rendering would hold the event loop for the flood's duration.
 proc ::questlog::ui::app::on_scan_row {row} {
+    variable ScanPending
+    variable ScanFlushTimer
+    lappend ScanPending $row
+    if {$ScanFlushTimer eq ""} {
+        set ScanFlushTimer [after idle [namespace code flush_scan]]
+    }
+}
+
+# Render the buffered browse rows in one batch bracket, stopping at the
+# scan_render_slice_ms wall-clock budget and re-arming at idle to finish, so
+# typing always preempts. slice 0 drains everything in one pass - the
+# synchronous callers (on_scan_path, on_scan_done) use it because their
+# contract is a store that is current when they return.
+proc ::questlog::ui::app::flush_scan {{slice 1}} {
     variable SessionList
     variable PrevSnapshot
-    $SessionList on_scan_row $row
-    # Under criteria the stream attaches nothing (hydration prices what it
-    # models); otherwise queue a cost task only when the store does not
-    # already price this row - a changed file re-enters costless and is
-    # re-priced.
-    if {[::questlog::ui::any_criteria $PrevSnapshot]} return
-    set path [dict get $row path]
-    if {![dict exists $row cost_usd] && [$SessionList has_session $path] \
-        && [$SessionList sget $path cost] eq ""} {
-        start_cost_one $path
+    variable ScanPending
+    variable ScanFlushTimer
+    if {$ScanFlushTimer ne ""} { after cancel $ScanFlushTimer; set ScanFlushTimer "" }
+    if {[llength $ScanPending] == 0} return
+    set slice_ms [expr {$slice ? [::questlog::config::get scan_render_slice_ms] : 0}]
+    set deadline [expr {[clock milliseconds] + $slice_ms}]
+    set costing [expr {![::questlog::ui::any_criteria $PrevSnapshot]}]
+    set i 0
+    $SessionList begin_batch
+    foreach row $ScanPending {
+        $SessionList add_scan_row $row
+        incr i
+        # Under criteria the stream attaches nothing (hydration prices what
+        # it models); otherwise queue a cost task only when the store does
+        # not already price this row - a changed file re-enters costless and
+        # is re-priced.
+        if {$costing} {
+            set path [dict get $row path]
+            if {![dict exists $row cost_usd] && [$SessionList has_session $path] \
+                && [$SessionList sget $path cost] eq ""} {
+                start_cost_one $path
+            }
+        }
+        if {$slice_ms > 0 && [clock milliseconds] >= $deadline} break
     }
+    $SessionList end_batch
+    set ScanPending [lrange $ScanPending $i end]
+    if {[llength $ScanPending] > 0} {
+        set ScanFlushTimer [after idle [namespace code flush_scan]]
+    }
+}
+
+# Drop buffered browse rows and cancel a pending flush, when the load they
+# belong to is invalidated (a bounds change wipes the store before rescanning).
+proc ::questlog::ui::app::discard_scan_buffer {} {
+    variable ScanPending
+    variable ScanFlushTimer
+    if {$ScanFlushTimer ne ""} { after cancel $ScanFlushTimer; set ScanFlushTimer "" }
+    set ScanPending [list]
 }
 
 # Cost-pass worker callback. SessionList::refresh_cost is the only path that
@@ -740,15 +792,6 @@ proc ::questlog::ui::app::on_scan_progress {done total} {
         set ProgressLine "Scanning $done / $total…"
         refresh_status
     }
-    # Paint what this chunk added before the next one runs. Scanned rows land
-    # in the widget as they publish, but their repaint is idle-priority,
-    # and the cost pass keeps the event queue fed (worker results and their
-    # coalesce timers are events, which precede idle), so on a busy corpus the
-    # first paint otherwise drifts past the 1s gate (measured 1.15-1.25s)
-    # instead of landing near the chunk boundary.
-    # scan_resume is a timer, so this drains pending redraws only, never the
-    # scan itself.
-    update idletasks
 }
 
 # Scan finished. While browsing, return to the resting bounds line; under active
@@ -759,6 +802,9 @@ proc ::questlog::ui::app::on_scan_done {scanned} {
     variable PrevSnapshot
     variable ScanActive
     variable SessionList
+    # The pass is over, so the store must be whole before the wrap-up below
+    # reads it (the filter recount, and any caller awaiting done).
+    flush_scan 0
     set ScanActive 0
     $SessionList scan_end
     if {![::questlog::ui::any_criteria $PrevSnapshot]} { set StatusMode browse }
@@ -1165,7 +1211,12 @@ proc ::questlog::ui::app::track_rename_ok {dlg uuid} {
 # reached.
 proc ::questlog::ui::app::on_scan_path {path} {
     variable Scan
-    return [$Scan scan_path $path]
+    # scan_path publishes through the buffered stream, but this seam's callers
+    # (the running reconciler, show_excluded) read the store synchronously
+    # after it returns, so drain the buffer before handing the row back.
+    set row [$Scan scan_path $path]
+    flush_scan 0
+    return $row
 }
 
 # A session's subagents as child row dicts, for the list to render under it on

@@ -128,6 +128,9 @@ namespace eval ::questlog::config {
     # any machine. 0 renders the whole idle batch in one pass (faster overall,
     # but an ~800ms hitch on a very broad term).
     dict set Config search_render_slice_ms 50
+    # The browse twin: buffered scan rows render in idle slices capped at this
+    # many ms, so a worker flood cannot hold the main thread past one budget.
+    dict set Config scan_render_slice_ms 50
 
     # ---- polling -----------------------------------------------------------
     # Re-poll interval for the live-session registry (running markers). The cost

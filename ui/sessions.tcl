@@ -118,6 +118,11 @@ oo::class create ::questlog::ui::SessionList {
     variable CutReason        ;# the criterion that cut them: subtree|search|since|min_turns|""
     variable Pinned           ;# dict sid -> 1: sessions the reader pulled in past the search
     variable ViewRebuildTimer ;# after-id of the debounced hidden-aware rebuild, or ""
+    variable InBatch          ;# 1 between begin_batch and end_batch: row methods
+                              ;# leave the bracket (state, anchor, headings,
+                              ;# resort) to the batch instead of paying it per row
+    variable DirtyHeadings    ;# dict folder -> 1: headings whose aggregates moved
+                              ;# during the open batch, redrawn once at its close
     variable Query            ;# {terms <list> nocase 0|1} for hit highlighting
     variable HitTags
     # Domain indices into the node store: a folder name or a session/subagent
@@ -185,6 +190,8 @@ oo::class create ::questlog::ui::SessionList {
         set CutReason ""
         set Pinned [dict create]
         set ViewRebuildTimer ""
+        set InBatch 0
+        set DirtyHeadings [dict create]
         set Query [dict create terms [list] nocase 0]
         set SelectedSet [dict create]
         set SelectAnchor ""
@@ -830,22 +837,19 @@ oo::class create ::questlog::ui::SessionList {
                 dict set payload $k [my sget $path $k]
             }
         }
-        $Text configure -state normal
-        my anchor_save
+        my begin_batch
         my detach_session_children $path
         my node_set $sid expanded 0
         my drop_child_nodes $sid
         dict set Nodes $sid payload $payload
-        my redraw_folder_heading $folder
+        my mark_heading_dirty $folder
         my node_set $sid hidden [expr {![my attr_admits $sid]}]
         if {[my sflag $path hidden]} {
             my schedule_view_rebuild
         } elseif {[my sflag $path rendered]} {
             my redraw_header $path
         }
-        my anchor_restore
-        $Text configure -state disabled
-        my schedule_resort
+        my end_batch
         my check_invariant freshen_attached
     }
 
@@ -865,15 +869,14 @@ oo::class create ::questlog::ui::SessionList {
     # same node throughout.
     method fill_content {path row} {
         if {![my has_session $path]} return
-        $Text configure -state normal
+        my begin_batch
         if {![my row_matches_snapshot $row]} {
             my forget_session $path
-            $Text configure -state disabled
+            my end_batch
             return
         }
         set sid [my sid $path]
         set folder [my sget $path folder]
-        my anchor_save
         my detach_session_children $path
         my node_set $sid expanded 0
         my drop_child_nodes $sid
@@ -885,7 +888,7 @@ oo::class create ::questlog::ui::SessionList {
             my ensure_children_enumerated $path
             my recompute_parent_totals $path
         }
-        my redraw_folder_heading $folder
+        my mark_heading_dirty $folder
         my node_set $sid hidden [expr {![my attr_admits $sid]}]
         if {[my sflag $path hidden]} {
             my schedule_view_rebuild
@@ -894,9 +897,7 @@ oo::class create ::questlog::ui::SessionList {
         } elseif {[my folder_expanded $folder]} {
             my render_session $path
         }
-        my anchor_restore
-        $Text configure -state disabled
-        my schedule_resort
+        my end_batch
         my check_invariant fill_content
     }
 
@@ -927,6 +928,15 @@ oo::class create ::questlog::ui::SessionList {
     # class's attr_admits settles its hidden flag, so a filter only chooses what
     # paints.
     method on_scan_row {row} {
+        my begin_batch
+        my add_scan_row $row
+        my end_batch
+    }
+
+    # The batch body of on_scan_row: the caller holds the bracket (the app's
+    # sliced flush brackets many rows at once; single-row callers go through
+    # on_scan_row, which brackets one).
+    method add_scan_row {row} {
         # Under active criteria the result index owns the list, so the scan
         # stream attaches nothing; an out-of-bounds row is simply not modelled.
         if {[::questlog::ui::any_criteria $Snapshot]} return
@@ -948,8 +958,6 @@ oo::class create ::questlog::ui::SessionList {
             my freshen_attached $path $row
             return
         }
-        $Text configure -state normal
-        my anchor_save
         my model_add_session $path $row
         # The model holds every in-bounds session; the filters decide only
         # what paints. A row that lands hidden may leave its folder a heading
@@ -959,21 +967,41 @@ oo::class create ::questlog::ui::SessionList {
         } elseif {[my folder_expanded [dict get $row folder]]} {
             my render_session $path
         }
+    }
+
+    # Bracket a slice of row work so a whole idle flush does one
+    # anchor_save/restore, one redraw per touched folder heading and one
+    # schedule_resort, not one of each per row. InBatch counts depth, so the
+    # bracket nests: a row method that brackets itself when called singly
+    # (freshen_attached, fill_content, on_scan_row) opens a no-op inner
+    # bracket when an outer one already holds the widget - the outermost
+    # close is the one that settles headings, anchor, state and resort.
+    # A non-counting flag broke this: render_session_matches can re-enter
+    # on_scan_row through the scan-path seam, and an inner close that
+    # disabled the widget silently dropped every insert after it.
+    method begin_batch {} {
+        if {[incr InBatch] > 1} return
+        $Text configure -state normal
+        my anchor_save
+    }
+    method end_batch {} {
+        if {[incr InBatch -1] > 0} return
+        dict for {f _} $DirtyHeadings { my redraw_folder_heading $f }
+        set DirtyHeadings [dict create]
         my anchor_restore
         $Text configure -state disabled
         my schedule_resort
     }
 
-    # Bracket a slice of render_session_matches calls so a whole idle flush
-    # does one anchor_save/restore and one schedule_resort, not per session.
-    method begin_batch {} {
-        $Text configure -state normal
-        my anchor_save
-    }
-    method end_batch {} {
-        my anchor_restore
-        $Text configure -state disabled
-        my schedule_resort
+    # A folder heading whose aggregates moved: redraw now when unbatched,
+    # once per flush when batched (the per-row redraw was O(rows x folder
+    # size); this is O(flushes x touched folders)).
+    method mark_heading_dirty {folder} {
+        if {$InBatch} {
+            dict set DirtyHeadings $folder 1
+        } else {
+            my redraw_folder_heading $folder
+        }
     }
 
     # A whole found session from Search: its complete row and its full match list
@@ -984,12 +1012,9 @@ oo::class create ::questlog::ui::SessionList {
     # brackets many at once.
     method add_session_matches {matches {row ""}} {
         if {[llength $matches] == 0} return
-        $Text configure -state normal
-        my anchor_save
+        my begin_batch
         my render_session_matches $matches $row
-        my anchor_restore
-        $Text configure -state disabled
-        my schedule_resort
+        my end_batch
     }
 
     # A matched path absent from the model: model it and price it (the scan
@@ -1140,7 +1165,7 @@ oo::class create ::questlog::ui::SessionList {
             my recompute_parent_totals $path
         }
 
-        my redraw_folder_heading $folder
+        my mark_heading_dirty $folder
         my check_invariant model_add_session
     }
 
