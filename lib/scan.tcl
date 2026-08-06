@@ -23,14 +23,6 @@ package require leash
 
 namespace eval ::questlog::scan {}
 
-proc ::questlog::scan::cmp_mtime {a b} {
-    set ma [dict get $a mtime]
-    set mb [dict get $b mtime]
-    if {$ma < $mb} { return -1 }
-    if {$ma > $mb} { return 1 }
-    return 0
-}
-
 # Resume a coroutine from an `after` callback. The coroutine command deletes
 # itself when it returns, so a resume scheduled before a cancel can fire after
 # the coroutine is already gone; skip it then. An error the coroutine itself
@@ -66,7 +58,16 @@ set ::questlog::scan::WorkerScript {
             if {[tsv::get questlog scan_epoch] != $epoch} break
             if {[catch {::questlog::match::scan_file $path $clauses} res]} continue
             lassign $res row _
-            if {$row ne ""} { lappend rows $row }
+            if {$row eq ""} continue
+            # The subagent glob and sidecar reads ride the worker too, so the
+            # consumer's eager child enumeration opens nothing on the main
+            # thread; rows from other producers carry no children key and the
+            # consumer falls back to its enumeration seam.
+            if {[dict getdef $row has_subagents 0]
+                && ![catch {::questlog::match::subagent_rows $path} kids]} {
+                dict set row children $kids
+            }
+            lappend rows $row
         }
         thread::send -async $main_tid \
             [list ::questlog::scan::dispatch $obj_cmd on_worker_chunk $epoch $seq $rows]
@@ -663,57 +664,15 @@ oo::class create ::questlog::Scan {
         return $out
     }
 
-    # The subagents of one session, as child row dicts, built on demand when the
-    # list expands a session's chevron. Pure: globs the session's subagents dir,
-    # stats and reads the small meta sidecar of each, and returns them mtime DESC.
-    # Children never enter the row stream (they are not browse sessions); the
-    # list owns their model and their cost is computed on render, like a
-    # parent's.
+    # The subagents of one session, as child row dicts, mtime DESC. The pool
+    # scan attaches these to each row in the worker (the `children` key), so
+    # this main-thread seam serves the consumers outside that stream: the CLI,
+    # a search-attached row, and the reconcile paths. The extraction itself
+    # lives in ::questlog::match beside the row extractor, one home for both
+    # interps. Children never enter the row stream (they are not browse
+    # sessions); the list owns their model.
     method subagents_for {parent_path} {
-        set uuid [file rootname [file tail $parent_path]]
-        set subdir [file join [file dirname $parent_path] $uuid subagents]
-        set out [list]
-        foreach f [glob -nocomplain -directory $subdir -- agent-*.jsonl] {
-            lappend out [my subagent_row $f]
-        }
-        return [lsort -decreasing -command ::questlog::scan::cmp_mtime $out]
-    }
-
-    # One subagent's row dict, from its file path. The parent identity is the
-    # directory structure (<root>/<folder>/<uuid>/subagents/agent-<id>.jsonl), so
-    # everything is derived from the path; the label fields come from the meta
-    # sidecar Claude writes beside the transcript (agentType, description). Read
-    # with simple field regex, the same idiom scan_one uses on the jsonl itself.
-    method subagent_row {child_path} {
-        set subdir   [file dirname $child_path]   ;# <root>/<folder>/<uuid>/subagents
-        set sessdir  [file dirname $subdir]       ;# <root>/<folder>/<uuid>
-        set parent_uuid [file tail $sessdir]
-        set folder   [file tail [file dirname $sessdir]]
-        set parent_path [file join [file dirname $sessdir] $parent_uuid.jsonl]
-        set agent_id [file rootname [file tail $child_path]]
-        if {[catch {file mtime $child_path} mtime]} { set mtime 0 }
-        if {[catch {file size  $child_path} size]}  { set size 0 }
-        set agent_type ""
-        set description ""
-        set meta [file rootname $child_path].meta.json
-        if {![catch {open $meta r} fh]} {
-            chan configure $fh -encoding utf-8 -profile replace
-            set blob [read $fh]
-            close $fh
-            regexp {"agentType":"([^"]*)"} $blob -> agent_type
-            regexp {"description":"([^"]*)"} $blob -> description
-        }
-        return [dict create \
-            path $child_path \
-            mtime $mtime \
-            size $size \
-            folder $folder \
-            parent_path $parent_path \
-            parent_uuid $parent_uuid \
-            agent_id $agent_id \
-            agent_type $agent_type \
-            description $description \
-            is_child 1]
+        return [::questlog::match::subagent_rows $parent_path]
     }
 
     # The browse row for one session file: the multi-turn count, the first user

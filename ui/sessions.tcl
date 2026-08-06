@@ -885,7 +885,7 @@ oo::class create ::questlog::ui::SessionList {
         # them so the chevron and the parent's aggregated totals are right, the same
         # eager enumeration model_add_session does for a fresh row with subagents.
         if {[dict getdef $row has_subagents 0]} {
-            my ensure_children_enumerated $path
+            my ensure_children_enumerated $path [dict getdef $row children ""]
             my recompute_parent_totals $path
         }
         my mark_heading_dirty $folder
@@ -1161,7 +1161,7 @@ oo::class create ::questlog::ui::SessionList {
         my node_set $sid hidden [expr {![my attr_admits $sid]}]
 
         if {[dict getdef $row has_subagents 0]} {
-            my ensure_children_enumerated $path
+            my ensure_children_enumerated $path [dict getdef $row children ""]
             my recompute_parent_totals $path
         }
 
@@ -1504,13 +1504,16 @@ oo::class create ::questlog::ui::SessionList {
         my sweep_loose_tags
     }
 
-    # Ask the scanner for every subagent of this session and seed their models
-    # (meta only, no hits). Once per session; the matched-children set is built
-    # separately as search matches arrive.
-    method ensure_children_enumerated {path} {
+    # Seed the models of every subagent of this session (meta only, no hits).
+    # Once per session; the matched-children set is built separately as search
+    # matches arrive. A pool-scanned row carries its children with it, already
+    # enumerated in the worker; a caller without them in hand (a search-attached
+    # row, the reconcile paths) passes "" and the scanner seam enumerates here.
+    method ensure_children_enumerated {path {children ""}} {
         if {[my sget $path children_listed]} return
+        if {$children eq ""} { set children [{*}$OnSubagents $path] }
         set listed [list]
-        foreach crow [{*}$OnSubagents $path] {
+        foreach crow $children {
             my child_add_model $path $crow
             lappend listed [dict get $crow path]
         }

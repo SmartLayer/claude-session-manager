@@ -830,3 +830,55 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
     }
     return [list $row $matches]
 }
+
+# One subagent's row dict, from its file path. The parent identity is the
+# directory structure (<root>/<folder>/<uuid>/subagents/agent-<id>.jsonl), so
+# everything is derived from the path; the label fields come from the meta
+# sidecar Claude writes beside the transcript (agentType, description). Read
+# with simple field regex, the same idiom scan_file uses on the jsonl itself.
+# Lives here beside the row extractor so the pool worker and the main interp
+# share the one extraction home.
+proc ::questlog::match::subagent_row {child_path} {
+    set subdir   [file dirname $child_path]   ;# <root>/<folder>/<uuid>/subagents
+    set sessdir  [file dirname $subdir]       ;# <root>/<folder>/<uuid>
+    set parent_uuid [file tail $sessdir]
+    set folder   [file tail [file dirname $sessdir]]
+    set parent_path [file join [file dirname $sessdir] $parent_uuid.jsonl]
+    set agent_id [file rootname [file tail $child_path]]
+    if {[catch {file mtime $child_path} mtime]} { set mtime 0 }
+    if {[catch {file size  $child_path} size]}  { set size 0 }
+    set agent_type ""
+    set description ""
+    set meta [file rootname $child_path].meta.json
+    if {![catch {open $meta r} fh]} {
+        chan configure $fh -encoding utf-8 -profile replace
+        set blob [read $fh]
+        close $fh
+        regexp {"agentType":"([^"]*)"} $blob -> agent_type
+        regexp {"description":"([^"]*)"} $blob -> description
+    }
+    return [dict create \
+        path $child_path \
+        mtime $mtime \
+        size $size \
+        folder $folder \
+        parent_path $parent_path \
+        parent_uuid $parent_uuid \
+        agent_id $agent_id \
+        agent_type $agent_type \
+        description $description \
+        is_child 1]
+}
+
+# Every subagent of one session as child row dicts, mtime DESC: a glob of the
+# session's subagents dir, one stat and one small sidecar read per child.
+proc ::questlog::match::subagent_rows {parent_path} {
+    set uuid [file rootname [file tail $parent_path]]
+    set subdir [file join [file dirname $parent_path] $uuid subagents]
+    set pairs [list]
+    foreach f [glob -nocomplain -directory $subdir -- agent-*.jsonl] {
+        set row [subagent_row $f]
+        lappend pairs [list [dict get $row mtime] $row]
+    }
+    return [lmap p [lsort -integer -decreasing -index 0 $pairs] {lindex $p 1}]
+}
