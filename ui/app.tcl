@@ -549,7 +549,13 @@ proc ::questlog::ui::app::on_filter {snapshot} {
 
     # A new filter/search invalidates the previous result set; drop any buffered
     # per-file results and cancel a pending flush before the list is cleared, so
-    # a stale session never renders into the fresh list.
+    # a stale session never renders into the fresh list. The cost pass is
+    # cancelled too, for another reason: its queued jobs are full-transcript
+    # parses that share the FIFO pool with the coming re-scan's chunks. Left
+    # alive, they starve the fresh rows for minutes (the list sat blank after
+    # a search was typed and deleted). The epoch bump turns the backlog into
+    # no-ops; re-arriving rows re-queue their own pricing.
+    cancel_cost
     discard_search_buffer
     discard_scan_buffer
     $SessionList apply_filter $snapshot
