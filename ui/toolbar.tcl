@@ -42,9 +42,10 @@ package require searchfield
 #                    not a bound: every in-window session is scanned, stored,
 #                    priced and counted in the totals; a session below the
 #                    floor is hidden from the list, and moving the floor
-#                    re-derives the view in place with no rescan. The CLI's
-#                    min_turns bound (lib/scan.tcl row_in_bounds) is separate
-#                    and still cuts the corpus there.
+#                    re-derives the view in place with no rescan. The
+#                    min_turns snapshot key (lib/scan.tcl row_in_bounds)
+#                    remains a bound for a headless snapshot that carries it;
+#                    no shipped interface publishes it.
 #   cwd              launch cwd, constant after startup
 #
 # The view filters (running, bookmarked, model) are not here: they live

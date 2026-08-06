@@ -175,8 +175,8 @@ check "out-of-subtree arrival was scanned" [expr {$::SCANS >= 1}] 1
 check "out-of-subtree arrival not modelled" [$SL has_session $sessX] 0
 
 # --- 6. A min-turns floor: a one-turn arrival is scanned but not modelled.
-# min_turns here is the CLI-side bound the poll shares with row_in_bounds;
-# the GUI's floor rides as turns_view and never reaches this gate.
+# min_turns is the row_in_bounds snapshot bound; the GUI's floor rides as
+# turns_view and never reaches this gate.
 switch_scope [dict create since 30d min_turns 2]
 write_session $sessOne $cwdA {only-one} [clock seconds]
 touch_now $sessOne

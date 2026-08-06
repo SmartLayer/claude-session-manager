@@ -2,8 +2,8 @@
 # The toolbar's turns floor is a view filter: a session below it stays in the
 # store, priced and counted in the folder heading and the grand total, and
 # only its rendering is suppressed. Moving the floor re-derives the view over
-# the loaded rows in place - no rescan, no re-read. (The CLI's min_turns
-# snapshot key stays a bound; test-scan.tcl guards that side.)
+# the loaded rows in place - no rescan, no re-read. (The min_turns snapshot
+# key stays a row_in_bounds bound; test-scan.tcl guards that side.)
 
 package require Tcl 9
 package require Tk

@@ -169,9 +169,9 @@ $sr destroy
 ::questlog::path::_real_file delete -force [file join /tmp/questlog-test-projects $wf]
 ::questlog::path::_real_file delete -force [file join /tmp/questlog-test-projects $movedf]
 
-# min_turns is the CLI's bound (the GUI publishes the floor as turns_view, a
+# min_turns is a snapshot bound (the GUI publishes its floor as turns_view, a
 # view filter; test-turns-view.tcl guards that side): the scanner records each
-# row's nturns (capped), and filter::row_in_bounds drops a row below the floor. The 3-turn aaa session records
+# row's nturns (capped), and row_in_bounds drops a row below the floor. The 3-turn aaa session records
 # nturns 3; the single-turn bbb-2 records nturns 1. A min_turns 2 bound keeps the
 # two multi-turn rows (aaa 3, ccc 2) and drops bbb-2. The published stream is
 # the rows' one delivery; bounds questions are asked of the row dicts it carried.
