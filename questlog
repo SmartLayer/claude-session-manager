@@ -33,6 +33,13 @@ namespace eval ::questlog::config {
     dict set Config search_debounce_ms 200
 
     # ---- browse scan -------------------------------------------------------
+    # Paths per worker-pool chunk job. The pool pass posts the mtime-sorted
+    # list as contiguous chunks this many paths wide: wide enough that a full
+    # corpus is a few hundred jobs, narrow enough that the pool load-balances
+    # across a 4-orders-of-magnitude file-size spread.
+    dict set Config scan_chunk_files   24
+    # The keys below tune the single-thread coroutine fallback (Thread absent,
+    # QUESTLOG_THREADS=0, or the headless CLI); the pool pass reads none of them.
     # Files scanned per chunk before the coroutine yields to the event loop.
     # Larger = faster scan, coarser yielding (longer the UI can stall per chunk).
     # Chunk size sets the first-paint latency too: rows stream into the list

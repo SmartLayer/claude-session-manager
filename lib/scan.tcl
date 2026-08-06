@@ -41,6 +41,38 @@ proc ::questlog::resume_coro {co} {
     if {[llength [info commands $co]]} { $co }
 }
 
+# Worker->main delivery shim for the pool scan, the twin of
+# ::questlog::search::dispatch: async messages may arrive after the Scan
+# object is destroyed, so resolve the object command lazily and swallow.
+proc ::questlog::scan::dispatch {obj_cmd args} {
+    if {[info commands $obj_cmd] eq ""} return
+    if {[catch {{*}$obj_cmd {*}$args} err]} {
+        puts stderr "questlog::scan::dispatch: $err"
+    }
+}
+
+# The pool worker's chunk job, evaluated in each jobpool worker interp (the
+# prelude has loaded match.tcl there). Reads every path in its slice with the
+# same extractor the coroutine path uses and sends the rows home in one async
+# message. Exactly one message per chunk, sent on the abort path too, so the
+# main thread's in-order chunk accounting can never wait on a hole. The shared
+# tsv epoch is checked before each file: a cancelled pass stops reading within
+# one file, and whatever partial rows exist still travel (the main-thread
+# epoch gate drops them).
+set ::questlog::scan::WorkerScript {
+    proc job_scan_chunk {main_tid obj_cmd epoch seq paths clauses} {
+        set rows [list]
+        foreach path $paths {
+            if {[tsv::get questlog scan_epoch] != $epoch} break
+            if {[catch {::questlog::match::scan_file $path $clauses} res]} continue
+            lassign $res row _
+            if {$row ne ""} { lappend rows $row }
+        }
+        thread::send -async $main_tid \
+            [list ::questlog::scan::dispatch $obj_cmd on_worker_chunk $epoch $seq $rows]
+    }
+}
+
 # ---- bounds ----
 
 # ::questlog::scan - the single home for snapshot row-level matching.
@@ -286,6 +318,17 @@ oo::class create ::questlog::Scan {
                           ;# poll's disk-derived memo. An absent entry (or "")
                           ;# reads as changed, so a folder learned this tick is
                           ;# globbed next tick.
+    variable PoolEpoch    ;# the tsv scan epoch of the live pool pass, or ""
+                          ;# when none: the main-thread half of the two-sided
+                          ;# gate (workers check tsv, arrivals check this)
+    variable ChunkBuf     ;# dict: chunk seq -> rows, held only until the chunk
+                          ;# can be released in order; forward-once, never read
+                          ;# back, cleared on cancel - not a second row home
+    variable NextChunk    ;# the next chunk seq the in-order release expects
+    variable ChunksTotal  ;# chunks posted for the live pass
+    variable PathsTotal   ;# paths posted for the live pass (progress span)
+    variable Scanned      ;# rows published by the live pass
+    variable Per          ;# paths per chunk for the live pass
 
     constructor {on_row on_done {on_progress {}} {is_typing {}} {known_mtime {}}} {
         set Folders [dict create]
@@ -300,6 +343,13 @@ oo::class create ::questlog::Scan {
         set Kind [dict create]
         set NegFolders [dict create]
         set DirMtime [dict create]
+        set PoolEpoch ""
+        set ChunkBuf [dict create]
+        set NextChunk 0
+        set ChunksTotal 0
+        set PathsTotal 0
+        set Scanned 0
+        set Per 1
     }
 
     # Session origin from the opening record, classified by the shared
@@ -327,18 +377,113 @@ oo::class create ::questlog::Scan {
         return $kind
     }
 
-    # A stale coroutine drains itself at its next yield boundary.
+    # A stale coroutine drains itself at its next yield boundary; a pool pass
+    # is cut on both sides, the shared tsv epoch (queued jobs no-op before
+    # reading a file) and PoolEpoch (in-flight arrivals drop on the doorstep).
     method cancel {} {
         incr Epoch
         set Active 0
+        if {$PoolEpoch ne ""} {
+            ::questlog::jobpool::bump scan
+            set PoolEpoch ""
+            set ChunkBuf [dict create]
+        }
     }
 
     method extend {snapshot} {
         my cancel
         set Snapshot $snapshot
+        if {[my use_pool]} {
+            my start_threaded
+            return
+        }
         set my_epoch [incr Epoch]
         set Active 1
         my coro coro_$my_epoch [namespace which my] run_scan $my_epoch
+    }
+
+    # Whether this pass runs on the worker pool. The coroutine body below is
+    # the single-thread fallback, kept whole: QUESTLOG_THREADS=0, a host that
+    # never built the pool (Thread missing, the headless CLI) and a consumer
+    # that never loaded the jobpool layer (standalone tests) all land there.
+    # A live pool implies the Thread package and the search layer are loaded.
+    method use_pool {} {
+        if {[info commands ::questlog::jobpool::available] eq ""} { return 0 }
+        if {![::questlog::jobpool::available]} { return 0 }
+        if {[::questlog::search::env_threads] eq "0"} { return 0 }
+        return 1
+    }
+
+    # The pool pass. Chunks are contiguous slices of the mtime-sorted path
+    # list and are released strictly in seq order by on_worker_chunk, which
+    # reproduces the exact publish order of the sequential coroutine walk:
+    # streamtree skips its resort under the default sort on that promise.
+    # The differential skip runs here against the mtimes the enumeration
+    # already holds, so an unchanged corpus posts nothing.
+    method start_threaded {} {
+        set Active 1
+        set PoolEpoch [::questlog::jobpool::bump scan]
+        set NegFolders [dict create]
+        set ChunkBuf [dict create]
+        set NextChunk 0
+        set Scanned 0
+        set clauses [dict create leaves {} tree {t and nodes {}} nocase 1 \
+            turn_count_cap  [::questlog::config::get turn_count_cap] \
+            tail_window_bytes [::questlog::config::get tail_window_bytes]]
+        set paths [list]
+        foreach pair [my list_pairs_for $Snapshot] {
+            lassign $pair path m
+            if {$KnownMtime ne "" && [{*}$KnownMtime $path] eq $m} continue
+            lappend paths $path
+        }
+        set PathsTotal [llength $paths]
+        set Per [::questlog::config::get scan_chunk_files]
+        set chunks [list]
+        for {set i 0} {$i < [llength $paths]} {incr i $Per} {
+            lappend chunks [lrange $paths $i [expr {$i + $Per - 1}]]
+        }
+        set ChunksTotal [llength $chunks]
+        if {$ChunksTotal == 0} {
+            # Deferred, never synchronous inside extend: a caller's
+            # `extend; vwait done` must establish its vwait first.
+            my later 1 [list [self] pool_scan_done $PoolEpoch]
+            return
+        }
+        set tid [thread::id]
+        set seq 0
+        foreach c $chunks {
+            ::questlog::jobpool::post [list job_scan_chunk \
+                $tid [self] $PoolEpoch $seq $c $clauses]
+            incr seq
+        }
+        if {$OnProgress ne ""} { {*}$OnProgress 0 $PathsTotal }
+    }
+
+    # One chunk home from a worker. Release in seq order: buffer until the
+    # gap before it closes, then publish every buffered chunk in sequence.
+    method on_worker_chunk {epoch seq rows} {
+        if {$PoolEpoch eq "" || $epoch != $PoolEpoch} return
+        dict set ChunkBuf $seq $rows
+        while {[dict exists $ChunkBuf $NextChunk]} {
+            foreach row [dict get $ChunkBuf $NextChunk] {
+                my publish_row $row
+                incr Scanned
+            }
+            dict unset ChunkBuf $NextChunk
+            incr NextChunk
+            if {$OnProgress ne ""} {
+                {*}$OnProgress [expr {min($NextChunk * $Per, $PathsTotal)}] $PathsTotal
+            }
+        }
+        if {$NextChunk == $ChunksTotal} { my pool_scan_done $PoolEpoch }
+    }
+
+    method pool_scan_done {epoch} {
+        if {$PoolEpoch eq "" || $epoch != $PoolEpoch} return
+        set PoolEpoch ""
+        set Active 0
+        if {$OnProgress ne ""} { {*}$OnProgress $PathsTotal $PathsTotal }
+        if {$OnDone ne ""} { {*}$OnDone $Scanned }
     }
 
     # Coroutine body. Public so [namespace which my] resolves it.
@@ -464,6 +609,15 @@ oo::class create ::questlog::Scan {
     # rows alike - it is the switch a future automation-exhaust toggle would
     # flip (the sdk file count dwarfs interactive ~70x).
     method list_paths_for {snapshot {include_subagents 0} {cli_only 0}} {
+        return [lmap p [my list_pairs_for $snapshot $include_subagents $cli_only] {
+            lindex $p 0
+        }]
+    }
+
+    # The same enumeration as {path mtime} pairs, for the pool pass, whose
+    # differential skip compares against the mtime this walk already statted
+    # rather than statting every file a second time.
+    method list_pairs_for {snapshot {include_subagents 0} {cli_only 0}} {
         set root [::questlog::path::projects_root]
         if {![file isdirectory $root]} { return [list] }
         set cutoff [::questlog::scan::cutoff_for $snapshot]
@@ -498,13 +652,11 @@ oo::class create ::questlog::Scan {
                 }
             }
         }
-        set sorted [lsort -integer -decreasing -index 1 $pairs]
-        set out [list]
-        foreach p $sorted { lappend out [lindex $p 0] }
+        set out [lsort -integer -decreasing -index 1 $pairs]
         if {$cli_only} {
             set keep [list]
             foreach p $out {
-                if {[my session_kind $p] eq "cli"} { lappend keep $p }
+                if {[my session_kind [lindex $p 0]] eq "cli"} { lappend keep $p }
             }
             set out $keep
         }
