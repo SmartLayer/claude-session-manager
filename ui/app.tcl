@@ -35,12 +35,7 @@ namespace eval ::questlog::ui::app {
     variable CostFlushTimer   ;# after-id of the pending cost flush, or ""
     variable SearchPending    ;# list of per-file match lists buffered for an idle flush
     variable SearchFlushTimer ;# after-id of the pending search-render flush, or ""
-    variable CostPool         ;# Thread pool for background cost calculation, "" until spawned
-    variable CostPoolPending  ;# 1 while the pool's deferred creation is armed (Thread present, not yet built)
-    variable CostQueue        ;# paths requested before the pool exists, drained when it is
-    variable CostWarmTimer    ;# after-id of the one-shot pool spawn, or ""
     variable CostEpoch        ;# Epoch to drop stale results after a filter change
-    variable CostWorkerScript ;# Script evaluated in each cost worker
     variable StatusMode       ;# browse|scanning|searching|search_done|search_cancelled
     variable SearchSummary    ;# persistent terminal search line, "" when no criteria active
     variable ViewerPath       ;# opened-session path line; overrides every mode, "" when none
@@ -71,12 +66,7 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     variable CostFlushTimer
     variable SearchPending
     variable SearchFlushTimer
-    variable CostPool
-    variable CostPoolPending
-    variable CostQueue
-    variable CostWarmTimer
     variable CostEpoch
-    variable CostWorkerScript
     variable StatusMode
     variable SearchSummary
     variable ViewerPath
@@ -106,20 +96,7 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     set CostFlushTimer ""
     set SearchPending [list]
     set SearchFlushTimer ""
-    set CostPool ""
-    set CostPoolPending 0
-    set CostQueue [list]
-    set CostWarmTimer ""
     set CostEpoch 0
-    set CostWorkerScript {
-        package require Tcl 9
-        package require Thread
-        proc dispatch_main {path tid epoch} {
-            set r [::questlog::cost::parse_file $path]
-            thread::send -async $tid \
-                [list ::questlog::ui::app::on_cost_worker_result $path $epoch $r]
-        }
-    }
 
     # The <<ContextMenu>> virtual event already covers Button-2 on Aqua and
     # Button-3 on X11/Windows. Tk does not include Control-Click in it on
@@ -242,13 +219,9 @@ proc ::questlog::ui::app::start {root {seed {}}} {
         [namespace code on_search_progress] \
         [namespace code on_search_done]]
 
-    # Cost scanner: rate table + tpool for the second-pass per-session token sum.
-    # Load rates first so the first worker has them. The pool itself is not built
-    # here: its workers' initcmd blocks the main thread (~130ms for four), so
-    # init_cost_pool only arms a deferred spawn and start_cost_one buffers cost
-    # requests until the first rows have painted (issue #56).
+    # Rate table for the main-thread pricing of worker cost results. The worker
+    # pool itself is built after the first paint, below.
     ::questlog::cost::load_rates $Root
-    init_cost_pool
 
     # The launcher normalised the command line's query into toolbar clause kinds
     # (file/tool/pattern/subtree) with their values - a {op path} or {name key}
@@ -284,6 +257,11 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     # main-thread cost parse) it is starved until the whole pass drains, and the
     # window then appears all at once, finished. This one pump maps it first.
     update idletasks
+
+    # The worker pool, built between the paint above and the scan the publish
+    # below starts: its workers' initcmd blocks the main thread (~100-150ms),
+    # which after the pump is invisible, and the scan needs the pool live.
+    ::questlog::jobpool::init $Root
 
     # No default `subtree`: the list opens across every project, and a bound is
     # added only when the user asks for one. A launch-cwd default bounded the list
@@ -1252,8 +1230,9 @@ proc ::questlog::ui::app::quit {} {
     # 3. Stop the cost pass before the window's objects go: a worker result
     #    still in flight would otherwise reach on_cost_result after the
     #    session list is gone. The epoch bump makes on_worker_result drop
-    #    those results.
+    #    those results. The pool goes with it.
     cancel_cost
+    ::questlog::jobpool::release
     # 4. Objects last; their leash destructors cancel their own arms.
     if {[info exists Search] && $Search ne ""} { catch {$Search destroy} }
     if {[info exists Scan]   && $Scan ne ""}   { catch {$Scan destroy} }
@@ -1262,64 +1241,10 @@ proc ::questlog::ui::app::quit {} {
 
 # ---- background cost queue ---------------------------------------------
 
-# Arm the cost pool without building it. Its workers' initcmd blocks the main
-# thread (~130ms for four; the fixed-size pool pre-spawns them all), so building
-# it here - on the first-paint path - would push the first row past the 1.0s
-# gate. Instead mark it pending; start_cost_one buffers requests and spawns the
-# pool once the first rows have painted (issue #56).
-proc ::questlog::ui::app::init_cost_pool {} {
-    variable CostPool
-    variable CostPoolPending
-    set CostPool ""
-    # Without Thread there is no pool and nothing to defer; start_cost_one parses
-    # on the main thread instead.
-    set CostPoolPending [::questlog::search::thread_available]
-}
-
-# Build the fixed-size cost tpool and drain the requests buffered while it was
-# pending. minworkers = maxworkers: a min-0 pool never grows past the one worker
-# it lazily spawns, so the whole pass runs serially (issue #56). Called from a
-# deferred timer armed by the first cost request, so the initcmd block lands
-# after the first rows are on screen, not before them.
-proc ::questlog::ui::app::spawn_cost_pool {} {
-    variable CostPool
-    variable CostPoolPending
-    variable CostQueue
-    variable CostWarmTimer
-    variable CostWorkerScript
-    variable Root
-    set CostWarmTimer ""
-    if {!$CostPoolPending} return
-    set CostPoolPending 0
-    # The worker runs parse_file, which delegates token parsing to the tallyman
-    # module; the module search path is registered so cost.tcl's
-    # `package require tallyman` resolves in the fresh worker interp.
-    set initcmd "::tcl::tm::path add [list [file join $Root modules]]
-::tcl::tm::path add [list [file join $Root vendor]]
-source [list [file join $Root lib cost.tcl]]\n$CostWorkerScript"
-    set n [::questlog::config::get cost_workers]
-    set CostPool [tpool::create -minworkers $n -maxworkers $n -initcmd $initcmd]
-    set queued $CostQueue
-    set CostQueue [list]
-    foreach path $queued { post_cost_job $path }
-}
-
-# Post one parse to the live pool. The counter and spinner are the caller's
-# (start_cost_one), so a buffered job drained here is not double-counted.
-proc ::questlog::ui::app::post_cost_job {path} {
-    variable CostPool
-    variable CostEpoch
-    tpool::post -nowait $CostPool [list dispatch_main $path [thread::id] $CostEpoch]
-}
-
 proc ::questlog::ui::app::start_cost_one {path} {
-    variable CostPool
-    variable CostPoolPending
-    variable CostQueue
-    variable CostWarmTimer
     variable CostEpoch
     variable CostOutstanding
-    if {$CostPool eq "" && !$CostPoolPending} {
+    if {![::questlog::jobpool::available]} {
         # No worker pool (Thread package unavailable): parse on the main
         # thread, the same synchronous path the CLI uses (cli/cost.tcl), so
         # per-session cost still shows. The parse does not yield, so the UI
@@ -1329,30 +1254,19 @@ proc ::questlog::ui::app::start_cost_one {path} {
     }
     incr CostOutstanding
     update_spinner
-    if {$CostPool eq ""} {
-        # Pool pending: buffer the request and, on the first one, arm the spawn
-        # for the next idle - by then the first rows have painted, so the
-        # workers' initcmd block stays off the first-row path (issue #56).
-        lappend CostQueue $path
-        if {$CostWarmTimer eq ""} {
-            set CostWarmTimer [after idle [namespace code spawn_cost_pool]]
-        }
-        return
-    }
-    post_cost_job $path
+    ::questlog::jobpool::post [list job_cost $path [thread::id] $CostEpoch \
+        [list ::questlog::ui::app::on_cost_worker_result]]
 }
 
-# An epoch bump abandons every still-queued job: their replies will arrive under
-# the old epoch and be dropped without decrementing, so zero the counter here in
-# lockstep. Only jobs posted under the new epoch count from now on. Requests
-# still buffered for a not-yet-built pool are dropped in the same lockstep.
+# An epoch bump abandons every still-queued job. The local epoch makes arrived
+# replies drop without decrementing, so the counter zeroes here in lockstep;
+# the pool's shared epoch makes still-queued jobs no-op before reading a file.
 proc ::questlog::ui::app::cancel_cost {} {
     variable CostEpoch
     variable CostOutstanding
-    variable CostQueue
     incr CostEpoch
     set CostOutstanding 0
-    set CostQueue [list]
+    if {[::questlog::jobpool::available]} { ::questlog::jobpool::bump cost }
     update_spinner
 }
 
