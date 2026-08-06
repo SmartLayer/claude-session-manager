@@ -383,12 +383,8 @@ oo::class create ::questlog::ui::SessionList {
     method stored_mtime {path} {
         set id [my session_node $path]
         if {$id eq ""} { return "" }
-        # A stat-only skeleton (issue #11) is not a complete row: the store holds
-        # its date and size but not its content, so report no held mtime, and the
-        # content pass reads the file and upgrades it rather than skipping it as
-        # unchanged. A full row answers its real mtime, so an unchanged corpus
-        # still re-extends without a disk read.
-        if {[my node_pget $id stat_only 0]} { return "" }
+        # A full row answers its real mtime, so an unchanged corpus
+        # re-extends without a disk read.
         return [my node_pget $id mtime 0]
     }
 
@@ -886,54 +882,6 @@ oo::class create ::questlog::ui::SessionList {
         my check_invariant freshen_attached
     }
 
-    # Upgrade a stat-only skeleton with its content-pass fields (issue #11): the
-    # subject preview, slug, turn count and subagent flag the second stage read
-    # from the file, filled onto the row the first stage painted from stat alone.
-    # Built on the shape of freshen_attached, but the two stages stat the same
-    # file so the mtime is unchanged and cannot key the fill; the stat_only flag
-    # does, and it clears when the full payload lands. Re-evaluates snapshot
-    # membership now that nturns and the recorded cwd are known: a skeleton is
-    # admitted on folder-level evidence, so its content can reveal it out of the
-    # subtree bound (the lossy folder encoding over-includes a hyphenated sibling);
-    # such a row is forgotten rather than left showing. A floor never fails here -
-    # the stat pass runs only with no min-turns floor - so this drops nothing the
-    # single-pass scan would have shown, keeping the guarantee that no sub-bounds
-    # row flashes in then out. Selection, pin and anchor survive: the row is the
-    # same node throughout.
-    method fill_content {path row} {
-        if {![my has_session $path]} return
-        my begin_batch
-        if {![my row_matches_snapshot $row]} {
-            my forget_session $path
-            my end_batch
-            return
-        }
-        set sid [my sid $path]
-        set folder [my sget $path folder]
-        my detach_session_children $path
-        my node_set $sid expanded 0
-        my drop_child_nodes $sid
-        dict set Nodes $sid payload [my row_payload $path $row]
-        # The content pass may reveal subagents the skeleton could not see; enumerate
-        # them so the chevron and the parent's aggregated totals are right, the same
-        # eager enumeration model_add_session does for a fresh row with subagents.
-        if {[dict getdef $row has_subagents 0]} {
-            my ensure_children_enumerated $path [dict getdef $row children ""]
-            my recompute_parent_totals $path
-        }
-        my mark_heading_dirty $folder
-        my node_set $sid hidden [expr {![my attr_admits $sid]}]
-        if {[my sflag $path hidden]} {
-            my schedule_view_rebuild
-        } elseif {[my sflag $path rendered]} {
-            my redraw_header $path
-        } elseif {[my folder_expanded $folder]} {
-            my render_session $path
-        }
-        my end_batch
-        my check_invariant fill_content
-    }
-
     # Drop a session node's subagent child nodes and their indices - the
     # stale-children half of freshen_attached. Walks both child rosters:
     # all_child_paths (the enumerated set) plus the attached children list,
@@ -974,18 +922,6 @@ oo::class create ::questlog::ui::SessionList {
         # stream attaches nothing; an out-of-bounds row is simply not modelled.
         if {[::questlog::ui::any_criteria $Snapshot]} return
         set path [dict get $row path]
-        # The content pass of the two-stage scan (issue #11) publishes a full row
-        # for a path the stat pass already modelled as a skeleton. fill_content
-        # owns the upgrade and the bounds re-eval (a skeleton is admitted on
-        # folder-level evidence, so its content may reveal it out of bounds), so
-        # route there before the membership gate below - which the skeleton passed
-        # and which freshen_attached, keyed on an mtime change the two stages share,
-        # would no-op on anyway.
-        if {[dict exists $PathNode $path]
-            && [my sget $path stat_only 0] && ![dict getdef $row stat_only 0]} {
-            my fill_content $path $row
-            return
-        }
         if {![my row_matches_snapshot $row]} return
         if {[dict exists $PathNode $path]} {
             my freshen_attached $path $row
@@ -1006,7 +942,7 @@ oo::class create ::questlog::ui::SessionList {
     # anchor_save/restore, one redraw per touched folder heading and one
     # schedule_resort, not one of each per row. InBatch counts depth, so the
     # bracket nests: a row method that brackets itself when called singly
-    # (freshen_attached, fill_content, on_scan_row) opens a no-op inner
+    # (freshen_attached, on_scan_row) opens a no-op inner
     # bracket when an outer one already holds the widget - the outermost
     # close is the one that settles headings, anchor, state and resort.
     # A non-counting flag broke this: render_session_matches can re-enter
@@ -1170,7 +1106,6 @@ oo::class create ::questlog::ui::SessionList {
             cwd_hint $chint nturns $ntrn input_tokens $itok output_tokens $otok \
             cache_write_tokens $cwtok cache_read_tokens $crtok \
             model_breakdown $mbrk \
-            stat_only [dict getdef $row stat_only 0] \
             own_cost $cost own_turns $turns own_duration_secs $dsecs \
             own_human_secs $hsecs own_model $model own_context_pct $ctxp \
             count 0 snippets [list] \
