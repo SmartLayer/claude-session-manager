@@ -213,12 +213,15 @@ proc ::questlog::ui::app::start {root {seed {}}} {
         -anchor w -relief sunken
     pack .top.statusbar.status -side left -fill x -expand 1
 
+    # peek 0: the GUI's scanner never reads a transcript to name a folder; the
+    # pool pass warms the resolver cache from every row's cwd_hint, and
+    # restamp_subtree settles the stragglers when a subtree bound is active.
     set Scan [::questlog::Scan new \
         [namespace code on_scan_row] \
         [namespace code on_scan_done] \
         [namespace code on_scan_progress] \
         [namespace code scan_is_typing] \
-        [namespace code known_mtime]]
+        [namespace code known_mtime] 0]
 
     set Search [::questlog::Search new $Scan \
         [namespace code on_search_file] \
@@ -805,6 +808,11 @@ proc ::questlog::ui::app::on_scan_done {scanned} {
     # The pass is over, so the store must be whole before the wrap-up below
     # reads it (the filter recount, and any caller awaiting done).
     flush_scan 0
+    # Under a subtree bound, settle the rows the read-free resolver could not
+    # place when they streamed: the pass has warmed the resolver cache from
+    # every row's cwd_hint, so residence is answerable now, and a row admitted
+    # on its own cwd_hint that residence contradicts is dropped.
+    if {[llength [dict getdef $PrevSnapshot subtree {}]] > 0} { restamp_subtree }
     set ScanActive 0
     $SessionList scan_end
     if {![::questlog::ui::any_criteria $PrevSnapshot]} { set StatusMode browse }
@@ -813,6 +821,28 @@ proc ::questlog::ui::app::on_scan_done {scanned} {
     # The loaded set is final, so recount what the filter is missing from it now,
     # rather than leave a mid-scan count standing until the next poll tick.
     $SessionList refresh_filter_note
+}
+
+# Re-stamp residence on every stored row the streaming pass left unplaced
+# (folder_cwd ""), against the resolver cache the pass has since warmed, and
+# forget the rows the subtree bound no longer admits. Only the subtree bound
+# reads folder_cwd, so this runs only when one is active.
+proc ::questlog::ui::app::restamp_subtree {} {
+    variable SessionList
+    variable Scan
+    variable PrevSnapshot
+    $SessionList begin_batch
+    foreach path [$SessionList all_session_paths] {
+        if {[$SessionList sget $path folder_cwd] ne ""} continue
+        set cwd [$Scan folder_cwd [$SessionList sget $path folder]]
+        if {$cwd eq ""} continue
+        $SessionList sset $path folder_cwd [file normalize $cwd]
+        if {![::questlog::scan::row_in_bounds $PrevSnapshot \
+                [$SessionList payload_bounds_row $path]]} {
+            $SessionList forget_session $path
+        }
+    }
+    $SessionList end_batch
 }
 
 # ---- search callbacks --------------------------------------------------

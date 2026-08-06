@@ -330,8 +330,14 @@ oo::class create ::questlog::Scan {
     variable PathsTotal   ;# paths posted for the live pass (progress span)
     variable Scanned      ;# rows published by the live pass
     variable Per          ;# paths per chunk for the live pass
+    variable Peek         ;# 1 = resolve_folder may read a transcript to name a
+                          ;# folder (peek_folder_cwd), the exact answer the CLI
+                          ;# wants; 0 = cache and filesystem walk only, the GUI's
+                          ;# posture (no main-thread transcript read; the pool
+                          ;# pass warms the cache from every row's cwd_hint, and
+                          ;# the app restamps under a subtree bound at scan end)
 
-    constructor {on_row on_done {on_progress {}} {is_typing {}} {known_mtime {}}} {
+    constructor {on_row on_done {on_progress {}} {is_typing {}} {known_mtime {}} {peek 1}} {
         set Folders [dict create]
         set Epoch 0
         set Snapshot [dict create]
@@ -351,6 +357,7 @@ oo::class create ::questlog::Scan {
         set PathsTotal 0
         set Scanned 0
         set Per 1
+        set Peek $peek
     }
 
     # Session origin from the opening record, classified by the shared
@@ -809,10 +816,12 @@ oo::class create ::questlog::Scan {
     method resolve_folder {folder} {
         if {[dict exists $Folders $folder]} { return [dict get $Folders $folder] }
         if {[dict exists $NegFolders $folder]} { return "" }
-        set cwd [my peek_folder_cwd $folder]
-        if {$cwd ne "" && [file isdirectory $cwd]} {
-            dict set Folders $folder $cwd
-            return $cwd
+        if {$Peek} {
+            set cwd [my peek_folder_cwd $folder]
+            if {$cwd ne "" && [file isdirectory $cwd]} {
+                dict set Folders $folder $cwd
+                return $cwd
+            }
         }
         set cwd [my folder_cwd $folder]
         if {$cwd eq ""} { dict set NegFolders $folder 1 }
