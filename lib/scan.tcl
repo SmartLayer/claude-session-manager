@@ -52,7 +52,7 @@ proc ::questlog::scan::dispatch {obj_cmd args} {
 # one file, and whatever partial rows exist still travel (the main-thread
 # epoch gate drops them).
 set ::questlog::scan::WorkerScript {
-    proc job_scan_chunk {main_tid obj_cmd epoch seq paths clauses} {
+    proc scan_rows {epoch paths clauses} {
         set rows [list]
         foreach path $paths {
             if {[tsv::get questlog scan_epoch] != $epoch} break
@@ -69,8 +69,15 @@ set ::questlog::scan::WorkerScript {
             }
             lappend rows $row
         }
-        thread::send -async $main_tid \
-            [list ::questlog::scan::dispatch $obj_cmd on_worker_chunk $epoch $seq $rows]
+        return $rows
+    }
+    proc job_scan_chunk {main_tid obj_cmd epoch seq paths clauses} {
+        thread::send -async $main_tid [list ::questlog::scan::dispatch $obj_cmd \
+            on_worker_chunk $epoch $seq [scan_rows $epoch $paths $clauses]]
+    }
+    proc job_scan_arrivals {main_tid obj_cmd epoch paths clauses} {
+        thread::send -async $main_tid [list ::questlog::scan::dispatch $obj_cmd \
+            on_worker_arrivals $epoch [scan_rows $epoch $paths $clauses]]
     }
 }
 
@@ -435,9 +442,7 @@ oo::class create ::questlog::Scan {
         set ChunkBuf [dict create]
         set NextChunk 0
         set Scanned 0
-        set clauses [dict create leaves {} tree {t and nodes {}} nocase 1 \
-            turn_count_cap  [::questlog::config::get turn_count_cap] \
-            tail_window_bytes [::questlog::config::get tail_window_bytes]]
+        set clauses [my browse_clauses]
         set paths [list]
         foreach pair [my list_pairs_for $Snapshot] {
             lassign $pair path m
@@ -492,6 +497,24 @@ oo::class create ::questlog::Scan {
         set Active 0
         if {$OnProgress ne ""} { {*}$OnProgress $PathsTotal $PathsTotal }
         if {$OnDone ne ""} { {*}$OnDone $Scanned }
+    }
+
+    # The empty clause set that makes scan_file the browse extractor, with the
+    # two caps stamped on (a worker cannot reach config; scan_one reads them
+    # from the clause dict for the same reason).
+    method browse_clauses {} {
+        return [dict create leaves {} tree {t and nodes {}} nocase 1 \
+            turn_count_cap  [::questlog::config::get turn_count_cap] \
+            tail_window_bytes [::questlog::config::get tail_window_bytes]]
+    }
+
+    # Arrival rows from a poll's chunk job: publish straight through - no
+    # in-order accounting, a poll is one chunk. Gated on the live tsv epoch,
+    # so arrivals queued before an extend's bump die on the doorstep (the new
+    # pass re-enumerates their files anyway).
+    method on_worker_arrivals {epoch rows} {
+        if {$epoch != [::questlog::jobpool::epoch scan]} return
+        foreach row $rows { my publish_row $row }
     }
 
     # Coroutine body. Public so [namespace which my] resolves it.
@@ -938,11 +961,21 @@ oo::class create ::questlog::Scan {
                 set known ""
                 if {[llength $KnownMtime]} { set known [{*}$KnownMtime $f] }
                 if {$known eq "" || $known ne $fm} {
-                    my scan_path $f
+                    lappend arrivals $f
                     incr scanned
                 }
             }
             dict set DirMtime $dir $m
+        }
+        if {![info exists arrivals]} { return 0 }
+        # With the pool live, the K arrivals read in a worker and publish
+        # through on_worker_arrivals when the rows come home; without it, the
+        # synchronous single-file scan as before.
+        if {[my use_pool]} {
+            ::questlog::jobpool::post [list job_scan_arrivals [thread::id] [self] \
+                [::questlog::jobpool::epoch scan] $arrivals [my browse_clauses]]
+        } else {
+            foreach f $arrivals { my scan_path $f }
         }
         return $scanned
     }
