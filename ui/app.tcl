@@ -37,9 +37,13 @@ namespace eval ::questlog::ui::app {
     variable SearchFlushTimer ;# after-id of the pending search-render flush, or ""
     variable ScanPending      ;# browse rows buffered for an idle sliced flush
     variable ScanFlushTimer   ;# after-id of the pending scan-render flush, or ""
-    variable DeferredCost     ;# hidden rows' cost jobs, posted once the visible
-                              ;# queue drains: the pool is FIFO, so post order
-                              ;# is priority order and shown rows price first
+    variable VisibleCost      ;# shown rows' cost jobs awaiting a pool slot
+    variable DeferredCost     ;# hidden rows', fed only once VisibleCost is
+                              ;# empty. Both reservoirs feed through feed_cost,
+                              ;# which keeps the pool queue shallow: the pool
+                              ;# is FIFO and the arrival poll's scan jobs share
+                              ;# it, so a scan job posted mid-pass waits behind
+                              ;# at most one batch of transcript parses
     variable CostEpoch        ;# Epoch to drop stale results after a filter change
     variable StatusMode       ;# browse|scanning|searching|search_done|search_cancelled
     variable SearchSummary    ;# persistent terminal search line, "" when no criteria active
@@ -105,6 +109,7 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     set SearchFlushTimer ""
     set ScanPending [list]
     set ScanFlushTimer ""
+    set VisibleCost [list]
     set DeferredCost [list]
     set CostEpoch 0
 
@@ -626,6 +631,7 @@ proc ::questlog::ui::app::flush_scan {{slice 1}} {
     variable PrevSnapshot
     variable ScanPending
     variable ScanFlushTimer
+    variable VisibleCost
     variable DeferredCost
     if {$ScanFlushTimer ne ""} { after cancel $ScanFlushTimer; set ScanFlushTimer "" }
     if {[llength $ScanPending] == 0} return
@@ -647,16 +653,17 @@ proc ::questlog::ui::app::flush_scan {{slice 1}} {
                 && [$SessionList sget $path cost] eq ""} {
                 if {[$SessionList sflag $path hidden]} {
                     # A hidden row's cost feeds only the aggregates, so it
-                    # waits for the visible queue to drain.
+                    # waits for the visible reservoir to empty.
                     lappend DeferredCost $path
                 } else {
-                    start_cost_one $path
+                    lappend VisibleCost $path
                 }
             }
         }
         if {$slice_ms > 0 && [clock milliseconds] >= $deadline} break
     }
     $SessionList end_batch
+    feed_cost
     set ScanPending [lrange $ScanPending $i end]
     if {[llength $ScanPending] > 0} {
         set ScanFlushTimer [after 0 [namespace code flush_scan]]
@@ -838,7 +845,7 @@ proc ::questlog::ui::app::on_scan_done {scanned} {
     # every row's cwd_hint, so residence is answerable now, and a row admitted
     # on its own cwd_hint that residence contradicts is dropped.
     if {[llength [dict getdef $PrevSnapshot subtree {}]] > 0} { restamp_subtree }
-    drain_deferred_cost
+    feed_cost
     set ScanActive 0
     $SessionList scan_end
     if {![::questlog::ui::any_criteria $PrevSnapshot]} { set StatusMode browse }
@@ -1282,11 +1289,16 @@ proc ::questlog::ui::app::on_subagents {path} {
     return [$Scan subagents_for $path]
 }
 
-# Trigger the cost second pass for one subagent file. The result returns
-# through on_cost_result, and the session list's refresh_cost routes it to
-# the child row.
+# Queue the cost second pass for one subagent file, at the head of the
+# visible reservoir: the next free pool slot takes it, and it rides the
+# feeder's cap like every other cost job (the list fires this for each
+# modelled child row, so a corpus-wide render is another flood). The result
+# returns through on_cost_result, and the session list's refresh_cost routes
+# it to the child row.
 proc ::questlog::ui::app::on_subagent_cost {path} {
-    start_cost_one $path
+    variable VisibleCost
+    set VisibleCost [linsert $VisibleCost 0 $path]
+    feed_cost
 }
 
 # ---- shared helpers exposed to UI components --------------------------
@@ -1371,23 +1383,37 @@ proc ::questlog::ui::app::start_cost_one {path} {
 proc ::questlog::ui::app::cancel_cost {} {
     variable CostEpoch
     variable CostOutstanding
+    variable VisibleCost
     variable DeferredCost
     incr CostEpoch
     set CostOutstanding 0
+    set VisibleCost [list]
     set DeferredCost [list]
     if {[::questlog::jobpool::available]} { ::questlog::jobpool::bump cost }
     update_spinner
 }
 
-# Post the hidden rows' cost jobs held back while visible rows priced. Fired
-# when the visible queue drains (the counter reaching 0) and at scan end.
-proc ::questlog::ui::app::drain_deferred_cost {} {
+# Feed queued cost jobs to the pool, visible reservoir first, keeping at most
+# a pool-width batch outstanding. The pool queue is FIFO and the arrival
+# poll's scan jobs share it, so a deep queued cost backlog would hold a live
+# session's row update behind whole-transcript parses; a shallow queue caps
+# that wait at one batch. The +2 margin keeps workers from idling between a
+# reply and its top-up. Fired from every scan flush, at scan end and (with
+# the pool live) on every cost reply; without the pool each posted job
+# completes synchronously, so one call drains both reservoirs.
+proc ::questlog::ui::app::feed_cost {} {
     variable CostOutstanding
+    variable VisibleCost
     variable DeferredCost
-    if {$CostOutstanding > 0 || [llength $DeferredCost] == 0} return
-    set held $DeferredCost
-    set DeferredCost [list]
-    foreach path $held { start_cost_one $path }
+    set cap [expr {[::questlog::config::get pool_workers] + 2}]
+    while {$CostOutstanding < $cap} {
+        if {[llength $VisibleCost] > 0} {
+            set VisibleCost [lassign $VisibleCost path]
+        } elseif {[llength $DeferredCost] > 0} {
+            set DeferredCost [lassign $DeferredCost path]
+        } else break
+        start_cost_one $path
+    }
 }
 
 proc ::questlog::ui::app::on_cost_worker_result {path epoch result} {
@@ -1397,7 +1423,7 @@ proc ::questlog::ui::app::on_cost_worker_result {path epoch result} {
     # Decrement for every live-epoch reply, success or failure, before the ok
     # gate, so a failed cost parse still retires its job and the counter drains.
     if {$CostOutstanding > 0} { incr CostOutstanding -1 }
-    if {$CostOutstanding == 0} { drain_deferred_cost }
+    if {[::questlog::jobpool::available]} { feed_cost }
     update_spinner
     if {![dict get $result ok]} return
 
