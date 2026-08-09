@@ -82,8 +82,9 @@ package provide coachman 1.12
 #
 #   0  success; the product is written to $log_file
 #   1  hard failure (no claude binary, no result in the output)
-#   2  external kill, stall, or truncated turn - the product on disk may
-#      still hold real work, so validate it rather than discard it
+#   2  external kill, stall, truncated turn, or an error envelope that is
+#      neither a usage limit nor an API access wall - the product on disk
+#      may still hold real work, so validate it rather than discard it
 #   3  cost cap tripped; the run was killed deliberately
 #      (finalise_resume is the bounded recovery: see that method)
 #
@@ -94,6 +95,16 @@ package provide coachman 1.12
 # with return 1, its fail_cause carrying the stable token
 # USAGE_LIMIT_UNRECOGNIZED so a batch front-end can halt loudly rather
 # than treat the error text as a product.
+#
+# An account-level API wall is that same animal read from the envelope's
+# structured fields rather than its prose: terminal_reason `api_error`
+# with a 401 or 403 status, the account a run authenticates as being
+# refused outright (a disabled subscription, a rejected key). No retry
+# clears it and every row of a batch meets it, so it fails with return 1
+# and the stable token API_ACCESS_DENIED, the second word a batch
+# front-end greps to halt. Every other is_error envelope returns 2: the
+# turn did not close cleanly, so its error text is not a product, but
+# work it did before erroring may sit on disk for the caller to judge.
 #
 # `abort` cancels an in-flight coroutine-driven run from outside; the
 # killed call returns 2 with its fail_cause naming the abort, an abort
@@ -940,6 +951,25 @@ oo::class create coachman::Harness {
                 my _fail "FAIL ($stage: USAGE_LIMIT_UNRECOGNIZED, suspected usage limit with no parseable reset (the CLI wording may have drifted): $Slug)"
                 return 1
             }
+            if {[my _is_api_access_wall $parsed]} {
+                # The account this run authenticates as cannot reach the
+                # API at all. Structured, not prose: the CLI has worded
+                # the same 403 several ways in one batch, and every
+                # wording carried the same status. Retrying spends
+                # nothing but wall time, and each remaining row of a
+                # batch meets the same refusal, so fail with the second
+                # halt token.
+                my _fail "FAIL ($stage: API_ACCESS_DENIED, HTTP [dict getdef $parsed api_error_status ?] refusing the account this run authenticates as; claude said: [string trim $result_text]): $Slug"
+                return 1
+            }
+            # Any other error envelope. The turn did not close cleanly,
+            # so its text is not the product, and writing it out as one
+            # is what let a dead run pass for a live one. Return 2, the
+            # code that says judge the disk: a session that erred after
+            # doing real work has that work sitting at the deliverable's
+            # path, and the caller's validator is the verdict.
+            my _fail "FAIL ($stage: error envelope; claude said: [string trim $result_text]; [my _failure_cause $log_file $json_file $exit_code]): $Slug"
+            return 2
         }
 
         if {![dict exists $parsed result]} {
@@ -1165,6 +1195,25 @@ oo::class create coachman::Harness {
         # ordinary per-row failure, not a subscription wall.
         if {[my _usage_window_marker $text]} { return {suspected {}} }
         return {none {}}
+    }
+
+    # _is_api_access_wall - true when the envelope reports the API refusing
+    # the account outright: terminal_reason `api_error` carrying a 401 or
+    # 403. A disabled subscription, a rejected key, an org that switched
+    # Claude Code off. Reads the envelope's own fields, where the sibling
+    # usage-limit classifier reads prose, because the CLI wore three
+    # different wordings for one 403 inside a single batch and every one
+    # of them carried the same status.
+    #
+    # 401 and 403 alone: they say this account may not, which no retry
+    # and no waiting changes. A 429 is a rate wall rather than a refusal,
+    # and where its wording reads as a usage window the prose classifier
+    # above claims it first; a 5xx is the server having a bad minute.
+    # Neither is a status this method claims, so both leave here by the
+    # ordinary error-envelope route.
+    method _is_api_access_wall {parsed} {
+        if {[dict getdef $parsed terminal_reason ""] ne "api_error"} { return 0 }
+        return [expr {[dict getdef $parsed api_error_status ""] in {401 403}}]
     }
 
     # _usage_window_marker - true when the text names a claude subscription

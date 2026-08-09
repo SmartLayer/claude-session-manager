@@ -89,6 +89,22 @@ switch -- $scen {
         puts {{"type":"system","subtype":"init","session_id":"sid-susp"}}
         puts {{"type":"result","subtype":"success","is_error":true,"result":"You've hit your monthly limit."}}
     }
+    denied403 {
+        puts {{"type":"system","subtype":"init","session_id":"sid-403"}}
+        puts {{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":403,"result":"Your organization has disabled Claude subscription access for Claude Code"}}
+    }
+    denied401 {
+        puts {{"type":"system","subtype":"init","session_id":"sid-401"}}
+        puts {{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":401,"result":"Failed to authenticate."}}
+    }
+    ratewall {
+        puts {{"type":"system","subtype":"init","session_id":"sid-429"}}
+        puts {{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":429,"result":"Overloaded."}}
+    }
+    othererr {
+        puts {{"type":"system","subtype":"init","session_id":"sid-other"}}
+        puts {{"type":"result","subtype":"success","is_error":true,"result":"Tool ran without output or errors."}}
+    }
     stall {
         puts {{"type":"system","subtype":"init","session_id":"sid-stall"}}
         flush stdout
@@ -191,6 +207,49 @@ check "a suspected usage limit returns 1" $rc 1
 check "fail_cause carries the halt token" \
     [string match "*USAGE_LIMIT_UNRECOGNIZED*" [$h_susp fail_cause]] 1
 check "the error text is not written as a product" [file exists $susp_log] 0
+
+# An API access wall: the account itself is refused, so no retry and no
+# wait clears it, and the batch front-end needs the second halt token.
+# SuspectHarness again, for the same reason: FakeHarness would make the
+# prose look waitable before the status is ever read.
+set ::env(FAKE_SCENARIO) denied403
+set h_403 [SuspectHarness new $pdir $logd]
+set denied_log [file join $logd denied.log]
+set rc [$h_403 call fetch4 $denied_log "p"]
+check "a 403 api_error returns 1" $rc 1
+check "fail_cause carries the access-denied token" \
+    [string match "*API_ACCESS_DENIED*" [$h_403 fail_cause]] 1
+check "fail_cause quotes what claude said" \
+    [string match "*disabled Claude subscription access*" [$h_403 fail_cause]] 1
+check "the refusal is not written as a product" [file exists $denied_log] 0
+
+set ::env(FAKE_SCENARIO) denied401
+set h_401 [SuspectHarness new $pdir $logd]
+set rc [$h_401 call fetch5 [file join $logd denied401.log] "p"]
+check "a 401 api_error returns 1" $rc 1
+check "401 carries the same token as 403" \
+    [string match "*API_ACCESS_DENIED*" [$h_401 fail_cause]] 1
+
+# A 429 is the rate wall, not an account refusal: it takes the ordinary
+# error-envelope route so a caller can retry it, and it must not carry
+# the halt token that cancels a whole batch.
+set ::env(FAKE_SCENARIO) ratewall
+set h_429 [SuspectHarness new $pdir $logd]
+set rc [$h_429 call fetch6 [file join $logd rate.log] "p"]
+check "a 429 api_error returns 2, not the wall's 1" $rc 2
+check "a 429 does not carry the halt token" \
+    [string match "*API_ACCESS_DENIED*" [$h_429 fail_cause]] 0
+
+# Any other error envelope: the turn did not close cleanly, so the caller
+# is told to judge the disk rather than handed the error text as a product.
+set ::env(FAKE_SCENARIO) othererr
+set h_other [SuspectHarness new $pdir $logd]
+set other_log [file join $logd other.log]
+set rc [$h_other call fetch7 $other_log "p"]
+check "an ordinary error envelope returns 2" $rc 2
+check "its error text is not written as a product" [file exists $other_log] 0
+check "fail_cause names the error envelope" \
+    [string match "*error envelope*" [$h_other fail_cause]] 1
 
 # resume before any successful call is a caller error, not a code.
 set h4 [FakeHarness new $pdir $logd]
