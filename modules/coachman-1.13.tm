@@ -101,8 +101,8 @@ package provide coachman 1.13
 # with a 401 or 403 status, the account a run authenticates as being
 # refused outright (a disabled subscription, a rejected key). No retry
 # clears it and every row of a batch meets it, so it fails with return 1
-# and the stable token API_ACCESS_DENIED, the second word a batch
-# front-end greps to halt. Every other is_error envelope returns 2: the
+# and the stable token API_ACCESS_DENIED, which a batch front-end greps
+# to halt. Every other is_error envelope returns 2: the
 # turn did not close cleanly, so its error text is not a product, but
 # work it did before erroring may sit on disk for the caller to judge.
 #
