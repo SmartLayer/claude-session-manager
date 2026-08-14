@@ -928,14 +928,9 @@ oo::class create ::questlog::ui::SessionList {
             return
         }
         my model_add_session $path $row
-        # The model holds every in-bounds session; the filters decide only
-        # what paints. A row that lands hidden may leave its folder a heading
-        # over nothing; the debounced rebuild settles that.
-        if {[my sflag $path hidden]} {
-            my schedule_view_rebuild
-        } elseif {[my folder_expanded [dict get $row folder]]} {
-            my render_session $path
-        }
+        # The model holds every in-bounds session; the filters decide only what
+        # paints, and draw_arrival owns which arrivals paint now.
+        my draw_arrival $path
     }
 
     # Bracket a slice of row work so a whole idle flush does one
@@ -1003,6 +998,26 @@ oo::class create ::questlog::ui::SessionList {
         if {[my sget $path cost] eq ""} { {*}$OnSubagentCost $path }
     }
 
+    # Draw a session that has just entered the model where it lands, or leave it
+    # to the debounced rebuild. The one home for that decision: browse arrivals,
+    # search matches and subagent matches all reach it, and written out at each
+    # site it drifted into three copies that did not agree.
+    #
+    # Two arrivals wait for the rebuild. One a filter hides, which drawn would
+    # leave its folder a heading over nothing. One whose folder the last rebuild
+    # dropped for having nothing visible under it (render_skip): the node keeps
+    # its expanded flag but mass_unrender cleared its marks, so there is no
+    # append point to draw beneath and the empty end mark reads as a bad text
+    # index. Deferring both, the rebuild lays the heading and the row together.
+    method draw_arrival {path} {
+        set folder [my sget $path folder]
+        if {[my sflag $path hidden] || ![my folder_attached $folder]} {
+            my schedule_view_rebuild
+        } elseif {[my folder_expanded $folder] && ![my sflag $path rendered]} {
+            my render_session $path
+        }
+    }
+
     # The render body without the anchor/state bracketing, so a flush can
     # bracket a whole slice of sessions once (see app.tcl flush_search). row is
     # the session's complete scan_file row, used to model a direct-match session
@@ -1020,21 +1035,7 @@ oo::class create ::questlog::ui::SessionList {
         if {![my has_session $path]} {
             my hydrate_session $path [dict get $first folder] $row
         }
-        # Search folders are expanded, so render the session if it is visible
-        # and not yet drawn. Two arrivals cannot be drawn where they land and
-        # wait for the debounced rebuild to re-derive the view instead: one a
-        # filter hides, which would leave its folder a heading over nothing, and
-        # one whose folder the last rebuild dropped for having nothing visible
-        # under it (render_skip), which has no heading to append beneath and so
-        # no append point - drawing into it reads an empty end mark. The rebuild
-        # lays the heading and the row together.
-        if {[my sflag $path hidden]
-                || ![my folder_attached [my sget $path folder]]} {
-            my schedule_view_rebuild
-        } elseif {[my folder_expanded [my sget $path folder]] \
-                  && ![my sflag $path rendered]} {
-            my render_session $path
-        }
+        my draw_arrival $path
         set cap [::questlog::config::get snippets_per_session]
         foreach m $matches {
             my sset $path count [expr {[my sget $path count] + 1}]
@@ -1766,11 +1767,7 @@ oo::class create ::questlog::ui::SessionList {
             my hydrate_session $parent $folder
         }
         my sset $parent has_subagents 1
-        if {![my sflag $parent hidden] \
-            && [my folder_expanded [my sget $parent folder]] \
-            && ![my sflag $parent rendered]} {
-            my render_session $parent
-        }
+        my draw_arrival $parent
         my ensure_children_enumerated $parent
         if {![my has_session $cp]} {
             my child_add_model $parent [dict create path $cp parent_path $parent \
@@ -2150,8 +2147,12 @@ oo::class create ::questlog::ui::SessionList {
         # unrendered, so item no-ops and the detached case guards itself.
         my item [my fid $folder]
         # item drops every tag on the re-laid line, including the folder selection
-        # highlight; re-add it from membership, the way redraw_header does.
-        if {[my is_folder_selected $folder]} {
+        # highlight; re-add it from membership, the way redraw_header does. The
+        # membership is model state and outlives a rebuild that detached the
+        # folder, so the heading has to be drawn before its start mark is read:
+        # relayout_content redraws every root's heading on a resize, detached
+        # ones included.
+        if {[my folder_attached $folder] && [my is_folder_selected $folder]} {
             set fm [my node_field [my fid $folder] start]
             $Text tag add selected $fm "$fm lineend"
         }

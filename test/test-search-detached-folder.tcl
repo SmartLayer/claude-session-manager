@@ -131,6 +131,84 @@ update
 check "the folder is drawn again" [$SL folder_attached $FOLDER] 1
 check "the admitted session is drawn" [$SL sflag $THICK rendered] 1
 
+
+# ---- the same arrival, reached the other two ways ---------------------------
+# A subagent match routes through add_subagent_matches before the guard above
+# runs, and a browse-mode scan row through add_scan_row. All three share
+# draw_arrival, so a detached folder defers in each.
+
+proc settle {tag} {
+    after 600 [list set ::$tag 1]
+    vwait ::$tag
+    update
+}
+
+# Raise the floor above every drawn row, so the folder empties and the rebuild
+# drops its heading. It stays above them for the rest of the file: an arrival
+# is admitted by carrying more turns than the floor, not by lowering it, since
+# lowering it rebuilds and re-attaches the folder before the arrival lands.
+$SL set_turns_view 5
+settle d1
+check "the folder detaches with every drawn row hidden" [$SL folder_attached $FOLDER] 0
+
+# A subagent match whose parent the floor admits. The parent is not in the
+# model yet, so it hydrates here, unrendered, into a detached folder - the
+# arrangement add_subagent_matches drew into.
+set PARENT [file join $P1 cccc.jsonl]
+write_session $PARENT {one two three four five six} $NOW
+set CHILD [file join $P1 cccc-child.jsonl]
+set ::bgerr ""
+if {[catch {
+    $SL begin_batch
+    $SL add_subagent_matches [list [dict create path $CHILD parent_path $PARENT \
+        folder $FOLDER agent_id ag1 line 1 btype user \
+        content "a needle here" lineoff 0 is_child 1]]
+    $SL end_batch
+} err]} { set ::bgerr $err }
+update
+check "the hydrated parent clears the floor" [$SL sflag $PARENT hidden] 0
+check "a subagent match into a detached folder raises nothing" $::bgerr ""
+
+# The browse stream reaches the same decision by its own door. add_scan_row
+# attaches nothing while a search is on (the result index owns the list then),
+# so this needs a browse snapshot, which clears the store and starts over.
+# Browse folders open collapsed, so the folder is expanded by hand: an expanded
+# folder emptied by a view floor is the arrangement that detaches one here.
+set FRESH [file join $P1 dddd.jsonl]
+write_session $FRESH {one two three four five six seven eight} $NOW
+$SL set_query [list] 1
+$SL apply_filter [dict create since all turns_view 1]
+update
+$SL add_scan_row [$::Scan scan_path $THIN]
+$SL add_scan_row [$::Scan scan_path $PARENT]
+update
+$SL toggle_folder $FOLDER
+update
+check "the browsed folder is expanded and drawn" \
+    [expr {[$SL folder_expanded $FOLDER] && [$SL folder_attached $FOLDER]}] 1
+$SL set_turns_view 7
+settle d2
+check "the browsed folder detaches when the floor empties it" \
+    [$SL folder_attached $FOLDER] 0
+set ::bgerr ""
+if {[catch {$SL add_scan_row [$::Scan scan_path $FRESH]} err]} { set ::bgerr $err }
+update
+check "the arriving scan row clears the floor" [$SL sflag $FRESH hidden] 0
+check "a scan row into a detached folder raises nothing" $::bgerr ""
+
+# The heading redraw a resize runs over every root, detached ones included,
+# with the detached folder selected: the selection is model state and survives
+# the rebuild that dropped the heading.
+settle d3
+$SL folder_select $FOLDER
+$SL set_turns_view 99
+settle d4
+check "the selected folder is detached" [$SL folder_attached $FOLDER] 0
+set ::bgerr ""
+if {[catch {$SL relayout_content} err]} { set ::bgerr $err }
+update
+check "redrawing a detached selected heading raises nothing" $::bgerr ""
+
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]
 exit $fails
