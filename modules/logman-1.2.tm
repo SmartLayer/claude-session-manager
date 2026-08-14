@@ -10,8 +10,8 @@ namespace eval ::logman {
     namespace export extract_text extract_blocks record_tool_uses \
         is_compact_boundary record_timestamp parse_iso fmt_gap first_cwd \
         is_user_turn is_hidden_record format_tool_use_full order_tool_keys \
-        is_turn_start record_role_label record_model context_window transcript_step \
-        is_dialogue_prompt command_text dialogue_body
+        is_turn_start opens_turn mark_turn_runs record_role_label record_model \
+        context_window transcript_step is_dialogue_prompt command_text dialogue_body
 }
 
 # Parse one JSONL line into a Tcl dict. Returns "" on parse failure.
@@ -139,6 +139,57 @@ proc ::logman::is_turn_start {rec} {
     }
     set bt [dict getdef [lindex $c 0] type ""]
     return [expr {$bt eq "text" || $bt eq "image"}]
+}
+
+# 1 iff this record is the one a turn's header line is drawn for: a turn start
+# carrying a body to draw. A bodiless record has no header line to open a turn
+# at, so ungated it would close the running turn and orphan everything after it
+# into always-visible preamble. The one home for the pair, so the grouping, the
+# renderer and the streaming hold-back cannot drift apart on what a turn is.
+proc ::logman::opens_turn {rec} {
+    return [expr {[is_turn_start $rec] && [extract_text $rec] ne ""}]
+}
+
+# Group a record list into turns and stamp the grouping onto the records.
+#
+# A user who edits a message before the assistant answers leaves one record per
+# draft, each a turn start in its own right. They are one turn: the message was
+# not final until the last of them. So a maximal run of turn starts with no
+# assistant record between them collapses, and the run's last member is the
+# turn. Every earlier member gets _superseded 1 and renders nothing; the
+# survivor gets _edits N, the count of drafts it replaced, absent at N = 0.
+#
+# The turn test is opens_turn, the same gate the renderer draws a header on, so
+# the grouping cannot disagree with what opens a region.
+#
+# Stamped rather than returned as a grouping, because a consumer walks the same
+# flat list either way and the stamps ride through the existing per-record
+# path. Whole list in, whole list out: the run's extent is knowable only at the
+# record that ends it, so a streaming consumer holds back its trailing turn
+# start until the next batch settles it (showman's append path does).
+proc ::logman::mark_turn_runs {recs} {
+    set runs {}
+    set cur {}
+    set i -1
+    foreach rec $recs {
+        incr i
+        if {[dict getdef $rec type ""] eq "assistant"} {
+            if {[llength $cur] > 1} { lappend runs $cur }
+            set cur {}
+            continue
+        }
+        if {[opens_turn $rec]} { lappend cur $i }
+    }
+    if {[llength $cur] > 1} { lappend runs $cur }
+    foreach run $runs {
+        foreach i [lrange $run 0 end-1] {
+            lset recs $i [dict replace [lindex $recs $i] _superseded 1]
+        }
+        set last [lindex $run end]
+        lset recs $last [dict replace [lindex $recs $last] \
+            _edits [expr {[llength $run] - 1}]]
+    }
+    return $recs
 }
 
 # Extract the canonical text body of a record.

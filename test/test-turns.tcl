@@ -110,6 +110,61 @@ check turn_last_prompt 0 [ts \
     {{"type":"last-prompt","lastPrompt":"resume?"}}]
 check turn_user_no_message 0 [ts {{"type":"user"}}]
 
+# ---- mark_turn_runs: drafts of one message are one turn --------------------
+# A message edited before the assistant replied leaves one record per draft.
+# The run collapses to its last member; the earlier drafts are stamped
+# _superseded and the survivor carries the count it replaced.
+proc mk {args} {
+    set out {}
+    foreach j $args { lappend out [::logman::parse_line $j] }
+    return $out
+}
+proc P {text} {
+    return "{\"type\":\"user\",\"promptSource\":\"typed\",\"message\":{\"role\":\"user\",\"content\":\"$text\"}}"
+}
+set A {{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}}
+# Stamps of a marked list, one word per record: "-" plain, "s" superseded,
+# "eN" the survivor of a run of N drafts.
+proc stamps {recs} {
+    set out {}
+    foreach r $recs {
+        if {[dict exists $r _superseded]} { lappend out s
+        } elseif {[dict exists $r _edits]} { lappend out e[dict get $r _edits]
+        } else { lappend out - }
+    }
+    return $out
+}
+
+check run_single_prompt {- -} \
+    [stamps [::logman::mark_turn_runs [mk [P "one"] $A]]]
+check run_two_drafts {s e1 -} \
+    [stamps [::logman::mark_turn_runs [mk [P "draf"] [P "draft"] $A]]]
+check run_four_drafts {s s s e3 -} \
+    [stamps [::logman::mark_turn_runs [mk [P a] [P b] [P c] [P d] $A]]]
+# An assistant record between two prompts ends the run: the message was
+# answered, so it was final. Two turns, no edits.
+check run_answered_between {- - - -} \
+    [stamps [::logman::mark_turn_runs [mk [P "one"] $A [P "two"] $A]]]
+# A run open at end of list still collapses - nothing after it can reopen it.
+check run_open_at_end {- s e1} \
+    [stamps [::logman::mark_turn_runs [mk $A [P "draf"] [P "draft"]]]]
+# The interruption notice is not a draft: it opens no turn, so it neither
+# collapses nor adds to the count. Here the two real prompts still pair.
+check run_interrupt_not_a_draft {- s - e1 -} \
+    [stamps [::logman::mark_turn_runs [mk $A [P "draf"] \
+        {{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}} \
+        [P "draft"] $A]]]
+# A bodiless turn start renders no header, so the renderer opens no region for
+# it; the grouping applies the same gate and leaves it out of the run.
+check run_empty_body_not_a_draft {- - -} \
+    [stamps [::logman::mark_turn_runs [mk $A [P ""] [P "real"]]]]
+# Records that are neither prompts nor assistant replies sit inside the run
+# without breaking it: the harness writes them while the user is still typing.
+check run_chrome_does_not_break {s - e1 -} \
+    [stamps [::logman::mark_turn_runs [mk [P "draf"] \
+        {{"type":"system","content":"<local-command-stdout>renamed</local-command-stdout>"}} \
+        [P "draft"] $A]]]
+
 # ---- extract_blocks: redacted_thinking arm ---------------------------------
 # A redacted_thinking block now emits a thinking pair with the placeholder,
 # parity with extract_array_text; the block was silently dropped before.

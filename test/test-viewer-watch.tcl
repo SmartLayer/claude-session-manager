@@ -161,21 +161,29 @@ check "the newline-less tail rendered nothing" [occurrences "Gamma partial"] 0
 check "the newline-less tail opened no turn" [llength [peek Turns]] $turns_before
 check "the newline-less tail set no dirty" [peek WatchDirty] 0
 
-# Complete the line with its trailing newline.
+# Complete the line with its trailing newline. It is a turn start at the tail,
+# so the append path holds it: the user may still be editing the message, and
+# the next write may be another draft of it. The hold costs one tick, and a
+# tick that brings nothing new releases it.
 set fh [open $JA a]
 fconfigure $fh -encoding utf-8
 puts $fh ""
 close $fh
 set ::refreshed [list]
 tick
+check "a trailing turn start is held, not rendered" [occurrences "Gamma partial"] 0
+check "the held record opened no turn yet" [llength [peek Turns]] $turns_before
+check "the hold marks the catch-up owed" [peek WatchDirty] 1
+check "the holding tick has not yet refreshed" [llength $::refreshed] 0
+
+# The file stopped growing, so nothing is coming to supersede the held record.
+# The quiescence tick releases it and runs the catch-up pass over it in one go.
+tick
 check "the completed record renders exactly once" [occurrences "Gamma partial"] 1
 check "the completed record opened its turn" [llength [peek Turns]] [expr {$turns_before + 1}]
-check "the completed record marked the catch-up owed" [peek WatchDirty] 1
-check "the completing tick has not yet refreshed" [llength $::refreshed] 0
-
-tick
-check "the following tick fires the refresh" [llength $::refreshed] 1
-check "the follow-up refresh carried the path" [lindex $::refreshed 0] $JA
+check "the releasing tick fires the refresh" [llength $::refreshed] 1
+check "the refresh carried the path" [lindex $::refreshed 0] $JA
+check "the releasing tick cleared the dirty flag" [peek WatchDirty] 0
 
 # ---- 3. shrink: a replace/truncate reloads, keeping prompt + identity -------
 poke PromptVar "unsent draft text"

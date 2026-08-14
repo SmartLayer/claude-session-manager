@@ -678,6 +678,13 @@ oo::class create ::questlog::ui::Viewer {
             -lmargin1 10 -lmargin2 10 -spacing1 6
         $Text tag configure stub -font QLMono \
             -foreground [::questlog::ui::theme::c faint] -lmargin1 10 -lmargin2 10
+        # editchip is the drafts note riding a user header line ("· 2 edits"),
+        # sited like the assistant header's model chip: after the role label,
+        # before the message. It sets no spacing or margin - it never holds a
+        # display line's first character, and a -spacing1 here would fight the
+        # label row's.
+        $Text tag configure editchip -font QLMono \
+            -foreground [::questlog::ui::theme::c faint]
         # Assistant blockquotes are plain tagged text, not embedded widgets:
         # `quote` is the inset block face (reading font, body ink, a deep left
         # margin so the block reads set in from the prose). Configured before
@@ -1085,6 +1092,8 @@ oo::class create ::questlog::ui::Viewer {
         dict set Bodies $lineno $body
         dict set Roles $lineno $label
         set CurTs $ts_iso
+        set edits [dict getdef $rec _edits 0]
+        if {$edits > 0} { my insert_edit_chip $edits }
         if {[dict getdef $rec type ""] eq "assistant"} {
             set mdl [::logman::record_model $rec]
             if {$mdl ne "" && $mdl ne $RenderModel} {
@@ -1100,10 +1109,7 @@ oo::class create ::questlog::ui::Viewer {
     # continuation inside a turn is not re-chipped. The turn model itself
     # (region close/open, the tool_result detail cover) is the base class's.
     method render_record_turned {rec last_ts in_section} {
-        if {[::logman::is_turn_start $rec]
-                && [::logman::extract_text $rec] ne ""} {
-            set RenderModel ""
-        }
+        if {[::logman::opens_turn $rec]} { set RenderModel "" }
         return [next $rec $last_ts $in_section]
     }
 
@@ -1135,8 +1141,10 @@ oo::class create ::questlog::ui::Viewer {
         set LoadedLines $lineno
         # Records are read before the widget is touched, so the common empty
         # tick (the 300 ms cadence outruns claude's writes) mutates nothing -
-        # in particular it does not churn the open turn's stub line.
-        if {![llength $recs]} { return 0 }
+        # in particular it does not churn the open turn's stub line. A tick
+        # with a held-back turn start standing is the exception: it carries no
+        # new records but has the hold to release, so it goes through.
+        if {![llength $recs] && ![llength [my pending]]} { return 0 }
         # The summary pop inside the door deletes a mid-document line, so
         # every text line number at or under it shifts - including the
         # hover-copy cache, whose stale window otherwise makes the ⧉ copy the
@@ -1375,9 +1383,16 @@ oo::class create ::questlog::ui::Viewer {
             # newline-less partial tail (append_new leaves it uncounted, growing
             # the size but yielding zero records) does not re-run every tick.
             # Only a nonzero append marks the catch-up index pass as owed.
+            # A tick that only held a trailing turn start back renders nothing
+            # and so appends nothing, but the quiescence branch still owes it a
+            # release, so the hold marks the catch-up owed too.
             set WatchSize $size
-            if {[my append_new] > 0} { set WatchDirty 1 }
+            if {[my append_new] > 0 || [llength [my pending]]} { set WatchDirty 1 }
         } elseif {$size == $WatchSize && $WatchDirty} {
+            # The file stopped growing, so a turn start held back at the tail is
+            # settled: nothing further is coming to supersede it. Release it
+            # before the index pass, so the indexes below see its turn.
+            if {[llength [my pending]]} { my append_new }
             # Quiescence after growth: run the same catch-up pass resume_finish
             # runs, so the match/tool/quote/turn indexes and the endhint track
             # the appended records, and refresh the session's list row.
@@ -1538,6 +1553,15 @@ oo::class create ::questlog::ui::Viewer {
     # fmt_model's reading, or model_label's id fallback when fmt_model blanks a
     # local id. Every piece also carries the shared `modelchip` marker tag (no
     # appearance, no -elide) so index_matches/match_context can skip the chip run.
+    # The drafts note on a user header line: the message shown is the one the
+    # user settled on, and this says how many earlier drafts it replaced. The
+    # drafts themselves are not rendered anywhere, so this is the only trace
+    # they leave. Carries the `editchip` marker so index_matches/match_context
+    # skip the run: a search for "edits" must not light every edited turn.
+    method insert_edit_chip {n} {
+        $Text insert end "· $n edit[expr {$n == 1 ? {} : {s}}]  " editchip
+    }
+
     method insert_model_chip {model} {
         set fam [::questlog::cost::model_family $model]
         set suf [expr {$fam ne "" ? $fam : "other"}]
@@ -2185,7 +2209,7 @@ oo::class create ::questlog::ui::Viewer {
     # The base skips stub and fold-glyph hits; the chip's words ("Opus",
     # "Sonnet", version digits) are equally chrome, not transcript - a search
     # for a family word or version number must never light every chip.
-    method find_chrome_tags {} { return [list stub foldglyph modelchip] }
+    method find_chrome_tags {} { return [list stub foldglyph modelchip editchip] }
 
     # Ctrl-F reaches the tables too: the base collects over the widget, which
     # cannot see into an embedded window, so append the table hits and
@@ -2344,10 +2368,12 @@ oo::class create ::questlog::ui::Viewer {
         # Write(" read twice. Start the excerpt where the content does: past
         # the fold glyph and the label, when the line opens with them.
         set s [$Text index "$idx linestart"]
-        # modelchip trails the role label on an assistant header line, so it is
-        # skipped after the lbl-* tags: each pass advances $s past a chrome run
-        # that starts exactly where the previous one left off.
-        foreach chrome {foldglyph lbl-user lbl-assistant lbl-system lbl-tool_result modelchip} {
+        # modelchip trails the role label on an assistant header line, and
+        # editchip does the same on a user one, so both are skipped after the
+        # lbl-* tags: each pass advances $s past a chrome run that starts
+        # exactly where the previous one left off.
+        foreach chrome {foldglyph lbl-user lbl-assistant lbl-system lbl-tool_result
+                        modelchip editchip} {
             set r [$Text tag nextrange $chrome $s "$s lineend"]
             if {[llength $r] && [$Text compare [lindex $r 0] == $s]} {
                 set s [lindex $r 1]

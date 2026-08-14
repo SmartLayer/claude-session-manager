@@ -260,5 +260,76 @@ $V live_close
 update idletasks
 check "live_close seals the repaint turn" [dict get [$V region_info $n3] open] 0
 
+
+# ---- drafts of one message render as one turn -------------------------------
+# A message edited before the assistant answered leaves one record per draft.
+# Only the settled draft gets a turn and a region; the earlier ones leave no
+# text behind, and the survivor's payload carries how many it replaced.
+ttk::frame .dv
+set D [::showman::Showman new .dv]
+pack .dv -fill both -expand 1
+set DText [$D textwidget]
+proc drafted {args} {
+    set out [list]
+    foreach j $args { lappend out [::logman::parse_line $j] }
+    return $out
+}
+set REPLY {{"type":"assistant","timestamp":"2026-07-20T11:00:09Z","message":{"role":"assistant","content":[{"type":"text","text":"Answer to the settled draft."}]}}}
+$D render_records [drafted \
+    {{"type":"user","promptSource":"typed","timestamp":"2026-07-20T11:00:00Z","message":{"role":"user","content":"How do I frobn"}}} \
+    {{"type":"user","promptSource":"typed","timestamp":"2026-07-20T11:00:04Z","message":{"role":"user","content":"How do I frobnicate a widget?"}}} \
+    $REPLY]
+update idletasks
+
+check "three records with two drafts open one turn" [$D region_count] 1
+check "the turn is labelled with the draft the user settled on" \
+    [dict get [$D payload 0] label] "How do I frobnicate a widget?"
+check "the superseded draft leaves no text in the view" \
+    [$DText search -elide -- "How do I frobn?" 1.0 end] ""
+check "the surviving turn counts the draft it replaced" \
+    [dict get [$D payload 0] edits] 1
+
+# The streamed tail cannot retract a rendered turn, so a trailing turn start is
+# held back: it renders only once the file says what followed it. Here the
+# successor is another draft, so the held record never becomes a turn of its own.
+ttk::frame .av
+set A2 [::showman::Showman new .av]
+pack .av -fill both -expand 1
+set AText [$A2 textwidget]
+$A2 render_records [drafted $REPLY]
+update idletasks
+set before [$A2 region_count]
+$A2 append_records [drafted \
+    {{"type":"user","promptSource":"typed","timestamp":"2026-07-20T11:10:00Z","message":{"role":"user","content":"Held draft one"}}}]
+update idletasks
+check "a trailing turn start is not rendered on arrival" \
+    [$A2 region_count] $before
+$A2 append_records [drafted \
+    {{"type":"user","promptSource":"typed","timestamp":"2026-07-20T11:10:06Z","message":{"role":"user","content":"Held draft two, settled"}}} \
+    {{"type":"assistant","timestamp":"2026-07-20T11:10:09Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}}]
+update idletasks
+check "the held draft and its successor become one turn" \
+    [$A2 region_count] [expr {$before + 1}]
+check "that turn shows the settled draft" \
+    [dict get [$A2 payload $before] label] "Held draft two, settled"
+check "the held draft left no text behind" \
+    [$AText search -elide -- "Held draft one" 1.0 end] ""
+
+# A tick that brings nothing new releases the hold: the file has had a full
+# interval to produce a successor and did not, so the message stands as typed.
+ttk::frame .fv
+set F [::showman::Showman new .fv]
+pack .fv -fill both -expand 1
+$F render_records [drafted $REPLY]
+update idletasks
+set before [$F region_count]
+$F append_records [drafted \
+    {{"type":"user","promptSource":"typed","timestamp":"2026-07-20T11:20:00Z","message":{"role":"user","content":"Last word"}}}]
+$F append_records [list]
+update idletasks
+check "an empty tick releases the held turn start" \
+    [$F region_count] [expr {$before + 1}]
+check "the released turn shows no edits" [dict get [$F payload $before] edits] 0
+
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]
 exit $fails

@@ -66,6 +66,7 @@ oo::class create ::showman::Showman {
     variable Top
     variable Text
     variable Records          ;# parsed records rendered, in document order
+    variable Pending          ;# a trailing turn start held back from the last append batch
     variable LineMap          ;# dict: record _line -> text index of its label line
     variable NextLine         ;# highest _line seen; numbers records that carry none
     variable RenderTs         ;# trailing render state: epoch of the last content record
@@ -236,6 +237,7 @@ oo::class create ::showman::Showman {
         if {![info exists StreamSetId]} { set StreamSetId "" }
         next
         set Records [list]
+        set Pending [list]
         set LineMap [dict create]
         set NextLine 0
         set RenderTs 0
@@ -265,7 +267,7 @@ oo::class create ::showman::Showman {
         my reset
         ::tkdown::forget $Text
         $Text configure -state normal
-        foreach rec $recs {
+        foreach rec [::logman::mark_turn_runs $recs] {
             set rec [my number_record $rec]
             lappend Records $rec
             lassign [my render_record_turned $rec $RenderTs $RenderInSection] \
@@ -283,12 +285,31 @@ oo::class create ::showman::Showman {
     # the summary with the caught-up counts. Finalizes any streamed message
     # first - a later live_write starts a fresh one - so a stream rewind can
     # never delete a finished record. Returns the number appended.
+    # A trailing turn start is held back rather than rendered. The user may be
+    # part way through editing the message, and the next batch would then carry
+    # another draft of it; a turn once rendered cannot be taken back, because a
+    # closed region is immutable. Holding it costs one tick of the caller's
+    # cadence. A call that brings nothing new releases the hold: the file has
+    # had a full interval to produce a successor and did not, so the message is
+    # as settled as the file can say.
+    # The trailing turn start held back from the last batch, empty when none
+    # stands. A streaming caller reads it to know that an otherwise-empty tick
+    # still has work to do: releasing the hold.
+    method pending {} { return $Pending }
+
     method append_records {recs} {
+        set fresh [llength $recs]
+        set recs [concat $Pending $recs]
+        set Pending [list]
+        if {$fresh && [llength $recs] && [::logman::opens_turn [lindex $recs end]]} {
+            set Pending [list [lindex $recs end]]
+            set recs [lrange $recs 0 end-1]
+        }
         if {![llength $recs]} { return 0 }
         my live_flush
         my batch {
             set m [my append_open]
-            foreach rec $recs {
+            foreach rec [::logman::mark_turn_runs $recs] {
                 set rec [my number_record $rec]
                 lappend Records $rec
                 lassign [my render_record_turned $rec $RenderTs $RenderInSection] \
@@ -352,6 +373,7 @@ oo::class create ::showman::Showman {
         if {[::logman::is_turn_start $rec]} {
             my region_open [dict create line $lineno \
                 label [lindex [split $body \n] 0] ts $ts_iso \
+                edits [dict getdef $rec _edits 0] \
                 counts [dict create] working 0]
             $Text insert end "▾ " {foldglyph turnhdr}
         }
@@ -377,12 +399,12 @@ oo::class create ::showman::Showman {
     # the header line. Every other record renders into the running region; a
     # tool_result record is detail in its entirety.
     method render_record_turned {rec last_ts in_section} {
-        # A turn start is gated on a body: a typed record whose extract_text
-        # is empty renders no header line to open a turn at; ungated, it
-        # would close the running turn and orphan everything after into
-        # always-visible preamble.
-        if {[::logman::is_turn_start $rec]
-                && [::logman::extract_text $rec] ne ""} {
+        # A draft the user edited before the assistant answered. mark_turn_runs
+        # stamped it; the message it was a draft of renders as the turn, with
+        # the count of drafts it replaced. Rendering nothing here opens no
+        # region, so the turn count and the turn index need no separate rule.
+        if {[dict exists $rec _superseded]} { return [list $last_ts $in_section] }
+        if {[::logman::opens_turn $rec]} {
             my region_close
             lassign [my render_record $rec $last_ts $in_section] \
                 last_ts in_section
@@ -577,9 +599,12 @@ oo::class create ::showman::Showman {
         my batch {
             set m [my append_open]
             my region_close
+            # edits 0: the driver hands over one settled prompt per turn, so a
+            # streamed exchange has no drafts to collapse. The key is present
+            # anyway, so a payload reader needs no special case for this path.
             set n [my region_open [dict create line "" \
                 label [lindex [split $label \n] 0] ts $ts \
-                counts [dict create] working 0]]
+                edits 0 counts [dict create] working 0]]
             $Text insert end "▾ " {foldglyph turnhdr}
             $Text insert end "USER  " lbl-user
             my insert_body user $label
