@@ -194,6 +194,23 @@ check turn_task_note 0 [::logman::is_user_turn \
     {{"type":"user","message":{"role":"user","content":"<task-notification>done</task-notification>"}}}]
 check turn_fast_reject 0 [::logman::is_user_turn \
     {{"type":"assistant","message":{"role":"assistant","content":"never a user turn"}}}]
+check turn_bash_stdout 0 [::logman::is_user_turn \
+    {{"type":"user","message":{"role":"user","content":"<bash-stdout>ok</bash-stdout>"}}}]
+check turn_bash_stderr 0 [::logman::is_user_turn \
+    {{"type":"user","message":{"role":"user","content":"<bash-stderr>boom</bash-stderr>"}}}]
+
+# The keys the parsed twin reads, now read here too, so the Turns column counts
+# what the viewer's turn index shows. isMeta arrives in both serialisations.
+check turn_ismeta_compact 0 [::logman::is_user_turn \
+    {{"type":"user","isMeta":true,"message":{"role":"user","content":"Stop hook feedback:\nsomething"}}}]
+check turn_ismeta_spaced 0 [::logman::is_user_turn \
+    {{"type":"user", "isMeta": true, "message":{"role":"user","content":"## Context Usage"}}}]
+check turn_ismeta_false 1 [::logman::is_user_turn \
+    {{"type":"user","isMeta":false,"message":{"role":"user","content":"a real prompt"}}}]
+check turn_interrupt_key 0 [::logman::is_user_turn \
+    {{"type":"user","interruptedMessageId":"m1","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}}]
+check turn_interrupt_no_key 0 [::logman::is_user_turn \
+    {{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}}]
 
 # ---- record_role_label: the speaker heading for viewer and export ----------
 # A typed prompt (string or block-array) is USER; a tool_result record - also

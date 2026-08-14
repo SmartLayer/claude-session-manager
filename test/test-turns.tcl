@@ -71,7 +71,20 @@ check turn_absent_sidechain 0 [ts \
 check turn_absent_interrupt 0 [ts \
     {{"type":"user","interruptedMessageId":"m1","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}}]
 
-# The four harness echoes the user never typed: string content leading with any
+# The harness omits interruptedMessageId on a stable minority of interruption
+# notices right across 2.1.x, and the notice then arrives shaped exactly like a
+# typed prompt: one text block, no promptSource, no meta marker. Both wordings
+# of the literal are rejected on the body alone.
+check turn_interrupt_no_key 0 [ts \
+    {{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}}]
+check turn_interrupt_no_key_tool_use 0 [ts \
+    {{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}}]
+# A prompt that merely mentions the notice is still a prompt: the literal has
+# to open the body.
+check turn_interrupt_quoted_mid_body 1 [ts \
+    {{"type":"user","message":{"role":"user","content":"why does it say [Request interrupted by user] here?"}}}]
+
+# The harness echoes the user never typed: string content leading with any
 # of these opens no turn.
 check turn_echo_command 0 [ts \
     {{"type":"user","message":{"role":"user","content":"<command-name>/foo</command-name>"}}}]
@@ -81,6 +94,12 @@ check turn_echo_caveat 0 [ts \
     {{"type":"user","message":{"role":"user","content":"<local-command-caveat>caveat</local-command-caveat>"}}}]
 check turn_echo_task_note 0 [ts \
     {{"type":"user","message":{"role":"user","content":"<task-notification>done</task-notification>"}}}]
+# A shell-out's captured output, the analogue of <local-command-stdout>. The
+# command line itself (<bash-input>) is left alone: the user did type it.
+check turn_echo_bash_stdout 0 [ts \
+    {{"type":"user","message":{"role":"user","content":"<bash-stdout>ok</bash-stdout><bash-stderr></bash-stderr>"}}}]
+check turn_echo_bash_stderr 0 [ts \
+    {{"type":"user","message":{"role":"user","content":"<bash-stderr>boom</bash-stderr>"}}}]
 
 # Non-user types are never turn starts; nor is a user record with no message.
 check turn_assistant 0 [ts \

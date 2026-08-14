@@ -27,7 +27,9 @@ proc ::logman::parse_line {line} {
 # a tool_result record is also role:user but its array opens with a
 # tool_result block, so it stays excluded. The string content must not be one
 # of the harness echoes the user never typed - a slash-command expansion, its
-# captured stdout or caveat, or a background-task notification. The one home
+# captured stdout or caveat, a shell-out's captured output, or a background-task
+# notification - and the record must carry neither the meta marker nor the
+# interruption notice, both of which wear a prompt's shape. The one home
 # for the turn predicate: the scanner counts nturns with it and the cost pass
 # counts turns with it, so the min-turns floor and the displayed Turns count
 # agree. A line-level regex, no parse: it runs over every line of every
@@ -36,8 +38,20 @@ proc ::logman::is_user_turn {line} {
     # fast reject: this literal is the head of the regexp below, so a line
     # lacking it cannot match - a necessary condition, string-cheaper than regexp.
     if {[string first {"role":"user","content":} $line] < 0} { return 0 }
+    # Harness records wearing a typed prompt's shape, rejected on the keys the
+    # parsed twin reads so the two predicates agree on what the harness wrote.
+    # isMeta covers the injections (hook feedback, skill bodies, /context
+    # reports, session-name reminders) and is written both compact and spaced.
+    # The last two are the interruption notice: interruptedMessageId marks most
+    # of them, and the body literal catches the rest. Each regexp sits behind a
+    # string-first gate, so a line without the key pays only the scan.
+    if {[string first {"isMeta"} $line] >= 0
+        && [regexp {"isMeta":\s*true} $line]}               { return 0 }
+    if {[string first {"interruptedMessageId"} $line] >= 0} { return 0 }
+    if {[string first {"type":"text","text":"[Request interrupted by user} \
+            $line] >= 0}                                    { return 0 }
     return [expr {[regexp {"role":"user","content":(?:"|\[\{"type":"(?:text|image)")} $line] \
-        && ![regexp {"content":"<(?:command-name|local-command-stdout|local-command-caveat|task-notification)>} $line]}]
+        && ![regexp {"content":"<(?:command-name|local-command-stdout|local-command-caveat|task-notification|bash-stdout|bash-stderr)>} $line]}]
 }
 
 # The speaker label a record shows in the reading view and the markdown
@@ -101,17 +115,24 @@ proc ::logman::is_turn_start {rec} {
         set ps [dict get $rec promptSource]
         return [expr {$ps eq "typed" || $ps eq "suggestion_accepted"}]
     }
-    # Old-format fallback: exclude the tool_result carrier, meta/summary/
-    # sidechain records, and the harness "[Request interrupted by user]" record
-    # (which carries interruptedMessageId), before reading content shape.
+    # Old-format fallback: exclude the tool_result carrier and the meta/
+    # summary/sidechain records before reading content shape.
     if {[is_tool_result_record $rec]}            { return 0 }
     if {[dict getdef $rec isMeta 0]}             { return 0 }
     if {[dict getdef $rec isCompactSummary 0]}   { return 0 }
     if {[dict getdef $rec isSidechain 0]}        { return 0 }
     if {[dict exists $rec interruptedMessageId]} { return 0 }
     set c [dict get $msg content]
+    # The harness interruption notice. interruptedMessageId marks most of them
+    # and is checked above, but the harness omits it on a stable minority right
+    # across 2.1.x, and the notice then reaches here shaped like a typed prompt
+    # (one text block). Its body is a fixed literal, so match that too.
+    set head [expr {[is_string_content $c]
+                    ? $c : [dict getdef [lindex $c 0] text ""]}]
+    if {[string first {[Request interrupted by user} $head] == 0} { return 0 }
     if {[is_string_content $c]} {
-        foreach pre {<command-name> <local-command-stdout> <local-command-caveat> <task-notification>} {
+        foreach pre {<command-name> <local-command-stdout> <local-command-caveat>
+                     <task-notification> <bash-stdout> <bash-stderr>} {
             if {[string match "$pre*" $c]} { return 0 }
         }
         return 1
