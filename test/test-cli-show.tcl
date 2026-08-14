@@ -84,6 +84,22 @@ write_file $toolfix \
 check "export_session: a tool_use turn folds the call inline" \
     [string match {*Bash*} [::questlog::markdown::export_session $toolfix]] 1
 
+# Drafts of a message edited before the assistant answered are one turn in the
+# viewer, so this mirror shows the same one: the settled draft, its anchor its
+# own record number, with no heading for the drafts it replaced.
+set draftfix [file join /tmp questlog-show-drafts-[pid].jsonl]
+write_file $draftfix [join {
+    {{"type":"user","promptSource":"typed","message":{"role":"user","content":"how do I frobn"}}}
+    {{"type":"user","promptSource":"typed","message":{"role":"user","content":"how do I frobnicate?"}}}
+    {{"type":"assistant","message":{"content":[{"type":"text","text":"gently"}]}}}
+} "\n"]
+check "export_session: a superseded draft gets no heading" \
+    [::questlog::markdown::export_session $draftfix 1] \
+    [join {"**\[#2] USER**\n\nhow do I frobnicate?" "**\[#3] ASSISTANT**\n\ngently"} "\n\n"]
+check "export_session: the dialogue view drops it too" \
+    [::questlog::markdown::export_session $draftfix 0 1] \
+    [join {"**USER**\n\nhow do I frobnicate?" "**ASSISTANT**\n\ngently"} "\n\n"]
+
 # ---- dialogue view: the conversation only ---------------------------------
 
 # A slash command, an assistant turn mixing thinking + prose + a tool call, the

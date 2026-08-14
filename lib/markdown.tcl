@@ -48,11 +48,27 @@ proc ::questlog::markdown::export_session {path {anchors 0} {dialogue 0}} {
     set out [list]
     set last_ts 0
     set lineno 0
+    # Read the records before walking them: the turn grouping the viewer shows
+    # needs the whole list, because a prompt is a draft only once a later one
+    # arrives with no assistant reply between. Nothing is lost by the wait, the
+    # assembled output being whole-file already.
+    set recs [list]
     while {[chan gets $fh line] >= 0} {
         incr lineno
         if {$line eq ""} continue
         set rec [::logman::parse_line $line]
         if {$rec eq ""} continue
+        dict set rec _line $lineno
+        lappend recs $rec
+    }
+    close $fh
+
+    foreach rec [::logman::mark_turn_runs $recs] {
+        set lineno [dict get $rec _line]
+        # A draft the user edited away before the assistant answered. The
+        # viewer renders only the message it was a draft of, so this mirror
+        # does the same, and the two agree on where a session breaks.
+        if {[dict exists $rec _superseded]} continue
 
         # Dialogue view: the conversation only, no dividers. The one selector
         # (dialogue_body) yields "" for every non-dialogue record, so the walk
@@ -92,7 +108,6 @@ proc ::questlog::markdown::export_session {path {anchors 0} {dialogue 0}} {
             }
         }
     }
-    close $fh
 
     # Assemble: each turn is its bold role heading then the body; each divider
     # heading sits on its own. Blank lines separate every block. Each entry

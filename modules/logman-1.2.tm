@@ -10,7 +10,8 @@ namespace eval ::logman {
     namespace export extract_text extract_blocks record_tool_uses \
         is_compact_boundary record_timestamp parse_iso fmt_gap first_cwd \
         is_user_turn is_hidden_record format_tool_use_full order_tool_keys \
-        is_turn_start opens_turn mark_turn_runs record_role_label record_model \
+        is_turn_start opens_turn mark_turn_runs count_turn_line \
+        record_role_label record_model \
         context_window transcript_step is_dialogue_prompt command_text dialogue_body
 }
 
@@ -139,6 +140,39 @@ proc ::logman::is_turn_start {rec} {
     }
     set bt [dict getdef [lindex $c 0] type ""]
     return [expr {$bt eq "text" || $bt eq "image"}]
+}
+
+# 1 iff this raw line counts as a turn, holding the run rule mark_turn_runs
+# holds: a prompt counts only where an assistant record has been written since
+# the last counted prompt, so the drafts of a message edited before the
+# assistant answered count once between them. statevar names a variable the
+# caller carries across one file's lines; this proc seeds and maintains it, and
+# a fresh (unset) one starts a file.
+#
+# The counting twin of mark_turn_runs, and the reason the rule is not simply
+# inlined at each counting site: the scanner and the cost pass both count, and a
+# rule authored twice is a rule that will disagree with itself. It counts the
+# first draft of a run where the grouping shows the last, which no total can
+# tell apart, and that way it needs no lookahead - this runs a line at a time
+# over every line of every session file.
+proc ::logman::count_turn_line {line statevar} {
+    upvar 1 $statevar settled
+    if {![info exists settled]} { set settled 1 }
+    # Runs on every line of every session file, so it is written cheapest-first:
+    # one string scan rejects the lines that say nothing about an assistant, a
+    # second settles the compact serialisation every current writer emits, and
+    # the regexp is reached only by the spaced form, which two files in the
+    # corpus use.
+    if {[string first {assistant} $line] >= 0} {
+        if {[string first {"type":"assistant"} $line] >= 0
+            || [regexp {"type":\s*"assistant"} $line]} {
+            set settled 1
+            return 0
+        }
+    }
+    if {!$settled || ![is_user_turn $line]} { return 0 }
+    set settled 0
+    return 1
 }
 
 # 1 iff this record is the one a turn's header line is drawn for: a turn start

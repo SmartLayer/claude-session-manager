@@ -548,6 +548,7 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
     }
     set fcap [expr {$is_child ? $snippet_cap_child : $snippet_cap}]
     set users 0
+    set turnstate 1          ;# count_turn_line's run state, one file's worth
     set first_user ""
     set cwd_hint ""
     set first_ts ""
@@ -627,7 +628,7 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
                     if {![dict exists $names $m]} { dict set names $m $lineno }
                 }
             }
-            if {$do_row && [::logman::is_user_turn $line]} {
+            if {$do_row && [::logman::count_turn_line $line turnstate]} {
                 incr users
                 # First-prompt preview: string content captured with escaped pairs
                 # kept whole (clean_preview unescapes them); a block-array prompt

@@ -265,6 +265,7 @@ proc tallyman::parse_lines {lines} {
     set first_ts ""
     set last_ts ""
     set turns 0
+    set turnstate 1          ;# count_turn_line's run state, one file's worth
     set stamps [list]
     set ask_ids [dict create]
     set last_model ""
@@ -279,8 +280,9 @@ proc tallyman::parse_lines {lines} {
         # turn the away gap before a resume into work. They are no part of the
         # conversation timeline, so skip outright.
         if {[regexp {"type":"file-history-snapshot"} $line]} continue
-        # A turn is a prompt the user actually wrote.
-        if {[::logman::is_user_turn $line]} { incr turns }
+        # A turn is a prompt the user actually wrote, and the drafts of a
+        # message edited before the assistant answered are one prompt.
+        if {[::logman::count_turn_line $line turnstate]} { incr turns }
         if {[regexp {"timestamp":"([^"]+)"} $line -> m]} {
             if {$first_ts eq ""} { set first_ts $m }
             set last_ts $m
@@ -426,6 +428,7 @@ proc tallyman::accrue_lines {lines lo hi rates cap} {
     set req_usage [dict create]
     set dummy_req 0
     set turns 0
+    set turnstate 1          ;# count_turn_line's run state, one file's worth
     set stamps [list]
     set ask_ids [dict create]
     set last_model ""
@@ -439,9 +442,11 @@ proc tallyman::accrue_lines {lines lo hi rates cap} {
         if {[regexp {"timestamp":"([^"]+)"} $line -> m]} { set e [_iso_to_epoch $m] }
         set in_win [expr {$e ne "" && $e > $lo && ($hi eq "" || $e <= $hi)}]
 
-        if {$in_win && [::logman::is_user_turn $line]} {
-            incr turns
-        }
+        # The run state advances over every line, in the window or not, so a
+        # window opening mid-run still knows whether a prompt starts a turn;
+        # only the counting is windowed.
+        set opens [::logman::count_turn_line $line turnstate]
+        if {$in_win && $opens} { incr turns }
         if {$in_win} { lappend stamps [list $e [_classify_stamp $line $ask_ids]] }
 
         if {![regexp {"type":"assistant"} $line]} continue

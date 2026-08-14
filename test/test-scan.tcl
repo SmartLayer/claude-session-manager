@@ -330,6 +330,7 @@ puts $fh {{"type":"assistant","message":{"role":"assistant","model":"claude-opus
 puts $fh {{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"},"timestamp":"2026-05-10T10:00:10.000Z"}}
 puts $fh {{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"timestamp":"2026-05-10T10:00:20.000Z"}}
 puts $fh {{"type":"user","message":{"role":"user","content":"real prompt two"},"timestamp":"2026-05-10T10:00:30.000Z"}}
+puts $fh {{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","content":"reply two"},"timestamp":"2026-05-10T10:00:35.000Z"}}
 puts $fh {{"type":"user","message":{"role":"user","content":"real prompt three"},"timestamp":"2026-05-10T10:01:00.000Z"}}
 close $fh
 
@@ -356,6 +357,37 @@ check floor_4_drops 0 [::questlog::scan::row_in_bounds [dict create since all mi
 check floor_agrees_with_column 1 [expr {$cost_turns >= 3}]
 
 $s4 destroy
+
+# ---- an edited message counts once, on both sides ---------------------------
+# Drafts of a message the user edited before the assistant answered are one
+# turn, so neither the floor's nturns nor the column's cost turns counts them
+# separately. Same three answered prompts as above, the middle one reached in
+# two drafts: still three turns, not four.
+set drafts_fix /tmp/questlog-test-projects/-home-test-code-foo/turns-2.jsonl
+set fh [open $drafts_fix w]
+chan configure $fh -encoding utf-8 -translation lf
+puts $fh {{"type":"user","message":{"role":"user","content":"real prompt one"},"cwd":"/home/test/code/foo","timestamp":"2026-05-11T10:00:00.000Z"}}
+puts $fh {{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","content":"reply"},"timestamp":"2026-05-11T10:00:05.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"prompt two, first dra"},"timestamp":"2026-05-11T10:00:30.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"prompt two, settled"},"timestamp":"2026-05-11T10:00:36.000Z"}}
+puts $fh {{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","content":"reply two"},"timestamp":"2026-05-11T10:00:40.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"real prompt three"},"timestamp":"2026-05-11T10:01:00.000Z"}}
+close $fh
+
+set s5 [::questlog::Scan new "" ""]
+set row4 [$s5 scan_one $drafts_fix]
+lassign [::questlog::match::scan_file $drafts_fix $empty_clauses] df_row _
+set draft_cost_turns [dict get [::questlog::cost::parse_file $drafts_fix] turns]
+
+check drafts_scan_one_is_three  3 [dict get $row4 nturns]
+check drafts_scan_file_is_three 3 [dict get $df_row nturns]
+check drafts_cost_is_three      3 $draft_cost_turns
+check drafts_floor_3_keeps 1 \
+    [::questlog::scan::row_in_bounds [dict create since all min_turns 3] $row4]
+check drafts_floor_4_drops 0 \
+    [::questlog::scan::row_in_bounds [dict create since all min_turns 4] $row4]
+
+$s5 destroy
 
 ::questlog::path::_real_file delete -force /tmp/questlog-test-projects
 

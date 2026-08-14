@@ -212,6 +212,31 @@ check turn_interrupt_key 0 [::logman::is_user_turn \
 check turn_interrupt_no_key 0 [::logman::is_user_turn \
     {{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}}]
 
+# ---- count_turn_line: the same run rule, counted a line at a time ----------
+# Drafts of a message edited before the assistant answered count once. The
+# state variable carries one file's worth of run state; a fresh one starts a
+# file. It counts the first draft of a run where the viewer shows the last,
+# which no total can tell apart, and that way it needs no lookahead.
+proc count_turns {lines} {
+    set n 0
+    unset -nocomplain st
+    foreach l $lines { incr n [::logman::count_turn_line $l st] }
+    return $n
+}
+set U1 {{"type":"user","promptSource":"typed","message":{"role":"user","content":"draf"}}}
+set U2 {{"type":"user","promptSource":"typed","message":{"role":"user","content":"draft"}}}
+set AS {{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}}
+check count_two_drafts_one_turn 1 [count_turns [list $U1 $U2 $AS]]
+check count_answered_between_two 2 [count_turns [list $U1 $AS $U2 $AS]]
+check count_four_drafts_one_turn 1 [count_turns [list $U1 $U2 $U1 $U2 $AS]]
+check count_run_at_end 2 [count_turns [list $U1 $AS $U1 $U2]]
+# The assistant key is written spaced in a small part of the corpus, so a run
+# must break on that form too or two turns would read as one.
+check count_spaced_assistant_breaks_run 2 [count_turns [list $U1 \
+    {{"type": "assistant", "message": {"role": "assistant", "content": []}}} $U2]]
+# A fresh state variable starts a file: the first prompt always counts.
+check count_first_prompt_counts 1 [count_turns [list $U1]]
+
 # ---- record_role_label: the speaker heading for viewer and export ----------
 # A typed prompt (string or block-array) is USER; a tool_result record - also
 # role:user - is TOOL RESULT, not USER; assistant is ASSISTANT; anything else
