@@ -1021,9 +1021,15 @@ oo::class create ::questlog::ui::SessionList {
             my hydrate_session $path [dict get $first folder] $row
         }
         # Search folders are expanded, so render the session if it is visible
-        # and not yet drawn. A result a filter hides leaves its folder a heading
-        # over nothing until the debounced rebuild re-derives the view.
-        if {[my sflag $path hidden]} {
+        # and not yet drawn. Two arrivals cannot be drawn where they land and
+        # wait for the debounced rebuild to re-derive the view instead: one a
+        # filter hides, which would leave its folder a heading over nothing, and
+        # one whose folder the last rebuild dropped for having nothing visible
+        # under it (render_skip), which has no heading to append beneath and so
+        # no append point - drawing into it reads an empty end mark. The rebuild
+        # lays the heading and the row together.
+        if {[my sflag $path hidden]
+                || ![my folder_attached [my sget $path folder]]} {
             my schedule_view_rebuild
         } elseif {[my folder_expanded [my sget $path folder]] \
                   && ![my sflag $path rendered]} {
