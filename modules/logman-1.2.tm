@@ -477,8 +477,15 @@ proc ::logman::command_text {content} {
 #                     attachments, meta and summary records)
 # The label a consumer pairs with this body is record_role_label's, the same
 # USER / ASSISTANT the full reading view uses.
-proc ::logman::dialogue_body {rec} {
+#
+# roles narrows the view to one side of it: a list drawn from {user assistant},
+# where the empty list keeps both. One side alone is the reading a study of the
+# human's part wants, where the assistant's prose outweighs the prompts by an
+# order of magnitude and is read back selectively, by the record numbers the
+# kept turns carry.
+proc ::logman::dialogue_body {rec {roles {}}} {
     if {[dict getdef $rec type ""] eq "assistant"} {
+        if {[llength $roles] && "assistant" ni $roles} { return "" }
         if {[dict getdef $rec isSidechain 0]} { return "" }
         set parts [list]
         foreach {btype content} [extract_blocks $rec] {
@@ -486,6 +493,7 @@ proc ::logman::dialogue_body {rec} {
         }
         return [join $parts "\n"]
     }
+    if {[llength $roles] && "user" ni $roles} { return "" }
     if {![is_dialogue_prompt $rec]} { return "" }
     set c [dict get [dict get $rec message] content]
     if {[is_string_content $c]} {
@@ -752,10 +760,10 @@ proc ::logman::first_cwd {path} {
 # record), which the reading-view export skips too, so it is not a context
 # "message". match is 0 for a neighbour; the hit's own record is built inline in
 # context_window with match 1.
-proc ::logman::turn_at {line lineno match {dialogue 0}} {
+proc ::logman::turn_at {line lineno match {dialogue 0} {roles {}}} {
     set rec [parse_line $line]
     if {$rec eq ""} { return "" }
-    set body [expr {$dialogue ? [dialogue_body $rec] : [extract_text $rec]}]
+    set body [expr {$dialogue ? [dialogue_body $rec $roles] : [extract_text $rec]}]
     if {$body eq ""} { return "" }
     return [dict create line $lineno role [record_role_label $rec] \
         text $body match $match]
@@ -775,7 +783,10 @@ proc ::logman::turn_at {line lineno match {dialogue 0}} {
 # dialogue_body instead, so a non-dialogue neighbour (a tool result, a system
 # note) drops from the window and a kept turn carries only its prose - the
 # machinery is stripped inside the turn, not just whole tool turns removed.
-proc ::logman::context_window {path hitline before after {dialogue 0}} {
+# roles rides on to dialogue_body: one side of the conversation alone, or both
+# for the empty list. The hit's own record is the window's centre and is emitted
+# whatever roles says, so a window never comes back headless.
+proc ::logman::context_window {path hitline before after {dialogue 0} {roles {}}} {
     if {[catch {open $path r} fh]} { return [list] }
     chan configure $fh -encoding utf-8 -profile replace
     set lineno 0
@@ -786,7 +797,7 @@ proc ::logman::context_window {path hitline before after {dialogue 0}} {
         incr lineno
         if {$lineno < $hitline} {
             if {$before <= 0} continue
-            set turn [turn_at $line $lineno 0 $dialogue]
+            set turn [turn_at $line $lineno 0 $dialogue $roles]
             if {$turn eq ""} continue
             lappend pre $turn
             if {[llength $pre] > $before} { set pre [lrange $pre 1 end] }
@@ -802,7 +813,7 @@ proc ::logman::context_window {path hitline before after {dialogue 0}} {
             }
             if {$after <= 0} break
         } else {
-            set turn [turn_at $line $lineno 0 $dialogue]
+            set turn [turn_at $line $lineno 0 $dialogue $roles]
             if {$turn eq ""} continue
             lappend post $turn
             if {[llength $post] >= $after} break

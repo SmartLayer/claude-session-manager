@@ -40,7 +40,12 @@ namespace eval ::questlog::markdown {
 # (::logman::dialogue_body): the user's prompts and the assistant's prose, no
 # tool calls, tool results, thinking, or dividers - the reading that a study of
 # the interaction itself wants. anchors still cite each kept turn.
-proc ::questlog::markdown::export_session {path {anchors 0} {dialogue 0}} {
+#
+# roles narrows that view to one side: a list drawn from {user assistant}, the
+# empty list keeping both. The prompts alone are a session read for how the
+# human drove it, at a fraction of the tokens the replies cost; the anchors are
+# what a reader follows back into the file for the replies worth having.
+proc ::questlog::markdown::export_session {path {anchors 0} {dialogue 0} {roles {}}} {
     if {[catch {open $path r} fh]} { return "" }
     chan configure $fh -encoding utf-8 -profile replace
 
@@ -74,7 +79,7 @@ proc ::questlog::markdown::export_session {path {anchors 0} {dialogue 0}} {
         # (dialogue_body) yields "" for every non-dialogue record, so the walk
         # keeps just the user prompts and assistant prose.
         if {$dialogue} {
-            set body [::logman::dialogue_body $rec]
+            set body [::logman::dialogue_body $rec $roles]
             if {$body ne ""} {
                 lappend out [list turn [::logman::record_role_label $rec] $body $lineno]
             }

@@ -34,8 +34,8 @@ $::questlog::cli::commandline::CL preamble {
 
 $::questlog::cli::commandline::CL subcommand rename {<session.jsonl> [title]} \
     {Set the session's custom title; an empty or omitted title reverts to the auto title.}
-$::questlog::cli::commandline::CL subcommand show {<session.jsonl|uuid> [--dialogue]} \
-    {Print the session as a readable transcript; --dialogue keeps only the user and assistant conversation, dropping tool calls.}
+$::questlog::cli::commandline::CL subcommand show {<session.jsonl|uuid> [--dialogue[:roles]]} \
+    {Print the session as a readable transcript; --dialogue keeps only the user and assistant conversation, dropping tool calls, and a :roles suffix of user or assistant keeps that side alone.}
 $::questlog::cli::commandline::CL subcommand install-claude-command {} \
     {Register questlog as a Claude Code command.}
 
@@ -107,10 +107,14 @@ $::questlog::cli::commandline::CL option -C -section context -arg N \
 $::questlog::cli::commandline::CL section dialogue {dialogue (--json/--markdown; the conversation, no machinery):}
 
 $::questlog::cli::commandline::CL option --dialogue -section dialogue \
+    -suffix roles \
+    -check {::questlog::cli::commandline::check_dialogue_roles $suffix} \
     -modes {json markdown} -because {a totals summary has no transcript to reduce} \
-    -fold {set dialogue 1} \
+    -fold {set dialogue 1
+           set dialogue_roles [::questlog::search::dialogue_roles $suffix]} \
     -help {{Keep only what the user typed and what the assistant replied;}
-           {drop tool calls, tool results, and thinking.}}
+           {drop tool calls, tool results, and thinking. A :roles suffix of}
+           {user or assistant keeps that side alone.}}
 
 # ---- clauses ---------------------------------------------------------------
 
@@ -239,6 +243,14 @@ proc ::questlog::cli::commandline::check_regions {suffix} {
     return ""
 }
 
+# The dialogue-role vocabulary lives in lib/search.tcl beside the regions it is
+# drawn from; a suffix naming a slice the conversation has no side for is a
+# usage error rather than a stack trace deep in the export.
+proc ::questlog::cli::commandline::check_dialogue_roles {suffix} {
+    if {[catch {::questlog::search::dialogue_roles $suffix} out]} { return $out }
+    return ""
+}
+
 # A pattern's first execution is deep inside the scan, where a throw is a stack
 # trace instead of a usage error, so it is run against nothing here first.
 proc ::questlog::cli::commandline::check_pattern {value suffix} {
@@ -305,7 +317,7 @@ proc ::questlog::cli::commandline::keyword_restriction {value suffix} {
 #   groups         the OR-of-ANDs: a list of AND-groups, each a list of clause
 #                  dicts {kind keyword|regex|tool, ..., neg 0|1}
 #   since until subtree limit limit_matches accrued nocase ctx_before ctx_after
-#   dialogue font debug
+#   dialogue dialogue_roles font debug
 #
 # The grammar is an OR (--or) of AND-groups (adjacency) of optionally-negated
 # (--not) clauses; groups is the closed AND-groups and cur the one being built,
@@ -327,6 +339,7 @@ proc ::questlog::cli::commandline::parse {argv} {
     set ctx_before 0
     set ctx_after 0
     set dialogue 0
+    set dialogue_roles [list]
     set groups [list]
     set cur [list]
     set pending_neg 0
@@ -377,7 +390,8 @@ proc ::questlog::cli::commandline::parse {argv} {
     return [dict create mode $mode groups $groups \
         limit $limit limit_matches $limit_matches subtree $subtree \
         since $since until $until accrued $accrued nocase $nocase \
-        ctx_before $ctx_before ctx_after $ctx_after dialogue $dialogue \
+        ctx_before $ctx_before ctx_after $ctx_after \
+        dialogue $dialogue dialogue_roles $dialogue_roles \
         font $font debug $debug]
 }
 

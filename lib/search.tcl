@@ -120,6 +120,22 @@ proc ::questlog::search::parse_regions {spec} {
     return [lsort -unique $out]
 }
 
+# The sides of the conversation a dialogue spec keeps, as the btypes
+# ::logman::dialogue_body reads: the empty list for an absent or `any` spec,
+# meaning both. Drawn from parse_regions so a side is spelled and abbreviated the
+# same way wherever a colon qualifier names one, then narrowed, because the
+# dialogue view holds only what was spoken: a machinery slice, or the names
+# history, has no side to keep and is refused rather than quietly ignored.
+proc ::questlog::search::dialogue_roles {spec} {
+    set roles [parse_regions $spec]
+    foreach r $roles {
+        if {$r ni {user assistant}} {
+            error "--dialogue: '[string map {_ -} $r]' is not a side of the conversation (want: user, assistant, any)"
+        }
+    }
+    return $roles
+}
+
 # build_clauses snapshot - normalise the toolbar's snapshot into the matcher's
 # {leaves tree nocase} form. The search terms become keyword leaves carrying the
 # region set, ANDed together; the regex patterns, the {op path} file

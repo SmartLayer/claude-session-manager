@@ -74,6 +74,13 @@ questlog show <uuid|session.jsonl>
 
 Prints a finished session as a readable transcript, each turn anchored by its record number so a conclusion can be quoted and cited. The argument is a `uuid` from a prior `--json` hit, or a path. This is how to recall what was said or decided in an earlier session, rather than reading the raw JSONL.
 
+`--dialogue` drops the machinery - tool calls, their results, thinking - and leaves the conversation. A `:roles` suffix of `user` or `assistant` keeps one side of it alone. The replies outweigh the prompts by an order of magnitude, so a session too large to read whole is read as its prompts first, which say what the human wanted and where the work turned, and the anchors are the way back in for the few replies worth the tokens.
+
+```bash
+questlog show <uuid> --dialogue:user        # what the human asked, and where
+questlog --json --dialogue:user --since 7d --keyword "refund flow"
+```
+
 ## Totalling cost and usage
 
 ```bash
