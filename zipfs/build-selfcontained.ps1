@@ -1,0 +1,180 @@
+# Build the self-contained single-file questlog image for Windows: one .exe
+# that runs on a host with no Tcl installed.
+#
+# The Windows twin of zipfs/build-selfcontained.sh, stage for stage: a static
+# Tcl 9, a static Tk 9, a static Thread, a custom wish linking the three, and
+# zipfs/build.tcl folding questlog's payload onto that wish. Only the toolchain
+# differs. Tcl's supported Windows build is nmake against MSVC, so the three
+# configure/make stages become nmake -f makefile.vc with OPTS=static,msvcrt,
+# and the link step is cl.exe rather than cc.
+#
+# Two Windows-only choices in the link:
+#   - /SUBSYSTEM:WINDOWS with /ENTRY:mainCRTStartup. A GUI program that keeps a
+#     console subsystem opens a console window behind its Tk window; the entry
+#     override drops the console while leaving appinit.c's plain main() intact,
+#     so one source file serves all three platforms.
+#   - the system libraries Tcl and Tk call into (sockets, shell, common
+#     controls) are named here, because a static build resolves them at our
+#     link rather than inside a DLL of its own.
+#
+# The .exe is unsigned. SmartScreen will interpose on first run for anything
+# downloaded without a code-signing certificate; docs/installation.md says so
+# and how to get past it.
+#
+# Requires: Visual Studio 2019+ with the C++ toolset (the hosted windows
+# runners carry it), and tar + curl (in Windows 10 1803 and later).
+#
+# Usage:
+#   pwsh -File zipfs/build-selfcontained.ps1
+#   $env:BUILD_DIR = 'C:\qlbuild'; pwsh -File zipfs/build-selfcontained.ps1
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+# Dependency versions, matching build-selfcontained.sh so both platforms ship
+# the same interpreter.
+$TclVer    = if ($env:TCL_VER)    { $env:TCL_VER }    else { '9.0.2' }
+$TkVer     = if ($env:TK_VER)     { $env:TK_VER }     else { '9.0.2' }
+$ThreadVer = if ($env:THREAD_VER) { $env:THREAD_VER } else { '3.0.1' }
+$TcllibVer = if ($env:TCLLIB_VER) { $env:TCLLIB_VER } else { '2.0' }
+
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$BuildDir = if ($env:BUILD_DIR) { $env:BUILD_DIR } else {
+    Join-Path ([System.IO.Path]::GetTempPath()) ("questlog-selfcontained-" + [System.Guid]::NewGuid().ToString('N').Substring(0, 8))
+}
+$Src     = Join-Path $BuildDir 'src'
+$Stage   = Join-Path $BuildDir 'interp'
+$Runtime = Join-Path $BuildDir 'runtime'
+foreach ($d in @($Src, $Stage, $Runtime)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+Write-Host "build dir: $BuildDir"
+
+# Run a command and stop the build on a non-zero exit; nmake and cl report
+# failure that way rather than by throwing.
+function Invoke-Checked {
+    param([string]$Exe, [string[]]$Arguments, [string]$WorkDir)
+    Push-Location $WorkDir
+    try {
+        & $Exe @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Exe $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+        }
+    } finally { Pop-Location }
+}
+
+# Import the MSVC x64 environment into this session: vswhere locates the
+# install, and the variables VsDevCmd sets (INCLUDE, LIB, PATH) are read back
+# out of a child cmd and applied here, since a child process cannot export to
+# its parent.
+function Import-VsDevEnv {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { throw "vswhere not found at $vswhere" }
+    $vsPath = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath
+    if (-not $vsPath) { throw 'no Visual Studio install with the C++ toolset' }
+    $devCmd = Join-Path $vsPath 'Common7\Tools\VsDevCmd.bat'
+    Write-Host "== msvc environment ($vsPath) =="
+    $lines = & "${env:COMSPEC}" /c "`"$devCmd`" -arch=amd64 -host_arch=amd64 >nul && set"
+    foreach ($line in $lines) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            Set-Item -Path ("env:" + $matches[1]) -Value $matches[2]
+        }
+    }
+}
+
+# Download and unpack one source tarball.
+function Get-Source {
+    param([string]$Url, [string]$OutFile)
+    $dest = Join-Path $Src $OutFile
+    Invoke-WebRequest -Uri $Url -OutFile $dest -UseBasicParsing
+    Invoke-Checked -Exe 'tar' -Arguments @('xzf', $dest) -WorkDir $Src
+}
+
+# The one static .lib a stage produced, searched for by pattern because the
+# name carries the version and the build-type suffix.
+function Find-StaticLib {
+    param([string]$Root, [string]$Pattern)
+    $hit = Get-ChildItem -Path $Root -Recurse -Filter $Pattern -ErrorAction SilentlyContinue |
+        Sort-Object Length -Descending | Select-Object -First 1
+    if (-not $hit) { throw "no library matching $Pattern under $Root" }
+    Write-Host "  found $($hit.FullName)"
+    return $hit.FullName
+}
+
+Import-VsDevEnv
+
+Write-Host '== fetching sources =='
+Get-Source "https://prdownloads.sourceforge.net/tcl/tcl$TclVer-src.tar.gz"        'tcl.tar.gz'
+Get-Source "https://prdownloads.sourceforge.net/tcl/tk$TkVer-src.tar.gz"          'tk.tar.gz'
+Get-Source "https://prdownloads.sourceforge.net/tcl/thread$ThreadVer.tar.gz"      'thread.tar.gz'
+Get-Source "https://prdownloads.sourceforge.net/tcllib/tcllib-$TcllibVer.tar.gz"  'tcllib.tar.gz'
+
+$TclSrc    = Join-Path $Src "tcl$TclVer"
+$TkSrc     = Join-Path $Src "tk$TkVer"
+$ThreadSrc = Join-Path $Src "thread$ThreadVer"
+$TcllibSrc = Join-Path $Src "tcllib-$TcllibVer"
+
+# OPTS=static links Tcl/Tk into our binary; msvcrt keeps the C runtime shared,
+# so the .exe uses the system CRT every Windows install already has rather than
+# carrying a second copy of it.
+$Opts = 'OPTS=static,msvcrt'
+
+Write-Host '== 1. static Tcl =='
+Invoke-Checked -Exe 'nmake' -WorkDir (Join-Path $TclSrc 'win') `
+    -Arguments @('-f', 'makefile.vc', $Opts, "INSTALLDIR=$Stage", 'release', 'install')
+
+Write-Host '== 2. static Tk =='
+Invoke-Checked -Exe 'nmake' -WorkDir (Join-Path $TkSrc 'win') `
+    -Arguments @('-f', 'makefile.vc', $Opts, "TCLDIR=$TclSrc", "INSTALLDIR=$Stage", 'release', 'install')
+
+Write-Host '== 3. static Thread =='
+Invoke-Checked -Exe 'nmake' -WorkDir (Join-Path $ThreadSrc 'win') `
+    -Arguments @('-f', 'makefile.vc', $Opts, "TCLDIR=$TclSrc", "TKDIR=$TkSrc", 'release')
+
+Write-Host '== 4. custom wish =='
+$TclLib    = Find-StaticLib -Root $TclSrc    -Pattern 'tcl*s.lib'
+$TkLib     = Find-StaticLib -Root $TkSrc     -Pattern '*tk*s.lib'
+$ThreadLib = Find-StaticLib -Root $ThreadSrc -Pattern 'thread*.lib'
+$Wish = Join-Path $BuildDir 'questlog-wish.exe'
+
+# STATIC_BUILD switches tcl.h and tk.h from the stubs table to direct entry
+# points, which is what a statically linked interpreter needs.
+$clArgs = @(
+    '/nologo', '/O2', '/DSTATIC_BUILD', '/DUSE_TCL_STUBS=0', '/DUSE_TK_STUBS=0',
+    "/I$(Join-Path $Stage 'include')",
+    "/I$(Join-Path $TclSrc 'generic')",
+    "/I$(Join-Path $TkSrc 'generic')",
+    "/I$(Join-Path $TkSrc 'win')",
+    "/I$(Join-Path $TkSrc 'xlib')",
+    (Join-Path $RepoRoot 'zipfs\appinit.c'),
+    "/Fe:$Wish",
+    '/link', '/SUBSYSTEM:WINDOWS', '/ENTRY:mainCRTStartup',
+    $TkLib, $TclLib, $ThreadLib,
+    'netapi32.lib', 'user32.lib', 'advapi32.lib', 'userenv.lib', 'ws2_32.lib',
+    'gdi32.lib', 'comdlg32.lib', 'imm32.lib', 'comctl32.lib', 'shell32.lib',
+    'uuid.lib', 'ole32.lib', 'oleaut32.lib'
+)
+Invoke-Checked -Exe 'cl' -Arguments $clArgs -WorkDir $BuildDir
+if (-not (Test-Path $Wish)) { throw "custom wish was not produced at $Wish" }
+
+Write-Host '== 5. runtime tree + image =='
+# As on Unix: a static interpreter's script library lives in the zip appended
+# to the stock tclsh, not on disk, so the authoritative trees are the source
+# library/ dirs. tcllib's json goes under the interpreter library so every
+# worker interp resolves it on auto_path.
+Copy-Item -Recurse -Force (Join-Path $TclSrc 'library') (Join-Path $Runtime 'tcl_library')
+Copy-Item -Recurse -Force (Join-Path $TkSrc  'library') (Join-Path $Runtime 'tk_library')
+$jsonDir = Join-Path $Runtime 'tcl_library\json'
+New-Item -ItemType Directory -Force -Path $jsonDir | Out-Null
+Copy-Item -Force (Join-Path $TcllibSrc 'modules\json\*.tcl') $jsonDir
+
+$tclsh = Get-ChildItem -Path (Join-Path $Stage 'bin') -Filter 'tclsh*.exe' |
+    Select-Object -First 1
+if (-not $tclsh) { throw "no tclsh under $Stage\bin" }
+
+$env:QUESTLOG_WISH = $Wish
+$env:QUESTLOG_RUNTIME = $Runtime
+Invoke-Checked -Exe $tclsh.FullName `
+    -Arguments @((Join-Path $RepoRoot 'zipfs\build.tcl')) -WorkDir $RepoRoot
+
+Write-Host "done. Keep $BuildDir for reuse, or remove it."
