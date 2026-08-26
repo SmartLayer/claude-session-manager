@@ -144,8 +144,12 @@ Invoke-Checked -Exe 'nmake' -WorkDir (Join-Path $TkSrc 'win') `
     -Arguments @('-f', 'makefile.vc', $Opts, "TCLDIR=$TclSrc", "INSTALLDIR=$Stage", 'release', 'install')
 
 Write-Host '== 3. static Thread =='
+# No target named here: Tcl and Tk carry their own makefile.vc with a release
+# target, while Thread is a TEA extension whose makefile.vc offers all, setup,
+# test, install and clean. Its default target builds the library, which is the
+# whole of what this stage wants.
 Invoke-Checked -Exe 'nmake' -WorkDir (Join-Path $ThreadSrc 'win') `
-    -Arguments @('-f', 'makefile.vc', $Opts, "TCLDIR=$TclSrc", "TKDIR=$TkSrc", 'release')
+    -Arguments @('-f', 'makefile.vc', $Opts, "TCLDIR=$TclSrc", "TKDIR=$TkSrc")
 
 Write-Host '== 4. custom wish =='
 $TclLib    = Find-StaticLib -Root $TclSrc    -Pattern 'tcl*s.lib'
