@@ -68,7 +68,7 @@ install -D -m 0644 assets/questlog-512.png \
 - Rates: a session on an unlisted model was costed at zero; every published Anthropic model is listed
 - Claude Code's configuration root is read from CLAUDE_CONFIG_DIR, then ~/.claude
 
-* Thu Jul 17 2026 Weiwu Zhang <a@colourful.land> - 1.2.0-1
+* Fri Jul 17 2026 Weiwu Zhang <a@colourful.land> - 1.2.0-1
 - Sessions list: the view filters move from the toolbar to the list's own strip as lenses (Running, Bookmarked, and a model checklist that excludes rather than chooses); an A/H multiplier column replaces H%; a Ctx% column shows how full a session sits if resumed; the first rows paint in under a second on a busy host
 - Session viewer: the transcript is a streaming document of foldable regions with Turns and Quotes index tabs; each assistant turn chipped with its model; tool results read as TOOL RESULT
 - CLI: the command line is declared once through ocmdline; a --markdown output mode joins --json and --shortstat; context flags -A/-B/-C return whole messages around each hit
