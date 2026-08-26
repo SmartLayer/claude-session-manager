@@ -48,21 +48,17 @@ Right-clicking a session offers "Open in viewer", "Copy resume command", "Copy s
 
 ## Installing
 
-Packages are on the [releases page](https://github.com/overseers-desk/questlog/releases).
+Everything is on the [releases page](https://github.com/overseers-desk/questlog/releases).
 
 ```
 sudo apt install ./questlog_<version>_all.deb        # Debian / Ubuntu
 sudo dnf install ./questlog-<version>-1.noarch.rpm   # Fedora / RHEL
+brew tap overseers-desk/od && brew install questlog  # macOS
 ```
 
-On macOS, through Homebrew:
+On macOS you can also open `questlog-<version>-macos-arm64.dmg` and drag the app to Applications; on Windows, run `questlog-<version>-windows-x86_64.exe`.
 
-```
-brew tap overseers-desk/od
-brew install questlog
-```
-
-A single-file executable is also on the releases page; [docs/installation.md](docs/installation.md) covers it and the Tcl 9 runtime it expects.
+Beside the packages sits a single-file executable per platform, carrying its own Tcl 9 so the host needs nothing installed. [docs/installation.md](docs/installation.md) covers every route, including the first-launch prompt an unsigned download meets on macOS and Windows.
 
 ## Running
 

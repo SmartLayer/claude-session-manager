@@ -1,8 +1,13 @@
 # Installing questlog
 
-questlog runs on Linux and macOS. Pick one of the methods below, then see the Running section of the [README](../README.md) for the GUI and the command-line criteria.
+questlog runs on Linux, macOS and Windows. Pick one of the methods below, then see the Running section of the [README](../README.md) for the GUI and the command-line criteria.
 
 Released artifacts are on the [releases page](https://github.com/overseers-desk/questlog/releases); the version appears in each filename.
+
+Two kinds of artifact are published, and the difference is what the host must already have:
+
+- **A distribution package** (`.deb`, `.rpm`, the Homebrew formula) installs questlog's scripts and lets the package manager pull the Tcl 9 runtime as a dependency. Pick one where your distribution carries Tcl 9.
+- **A single-file image** carries a statically linked Tcl 9, Tk 9 and the thread extension inside the executable. Nothing is installed and nothing is required on the host beyond its window system. Pick one anywhere else, or when you want one file to drop on a machine or a USB stick, or to run without root.
 
 ## Linux
 
@@ -14,6 +19,8 @@ Download `questlog_<version>_all.deb` and install it. apt pulls the Tcl 9 runtim
 sudo apt install ./questlog_<version>_all.deb
 ```
 
+The Tcl 9 packages it depends on first ship together in Debian 13 and Ubuntu 25.10, so on anything older apt will refuse the deb; take the single-file image instead.
+
 ### Fedora / RHEL
 
 Download `questlog-<version>-1.noarch.rpm` and install it:
@@ -24,20 +31,57 @@ sudo dnf install ./questlog-<version>-1.noarch.rpm
 
 ### Single-file image
 
-One executable carrying questlog's own code, with nothing to install. Download `questlog-<version>-linux-x86_64`, make it executable, and run it:
+Download `questlog-<version>-linux-x86_64` (or `-linux-arm64`), make it executable, and run it:
 
 ```
 chmod +x questlog-<version>-linux-x86_64
 ./questlog-<version>-linux-x86_64
 ```
 
-It needs the Tcl 9 runtime present on the host: `tcl9.0`, `tk9.0`, `tcllib`, and `tcl9.0-thread` (Debian/Ubuntu names; `tcl-thread` on Ubuntu is the Tcl 8.6 build and does not satisfy it), the same set the `.deb` declares, available from current distribution repositories. Use this when you want a single file to drop on a machine or a USB stick, or to run without root, on a host that already has or can add that runtime.
+It links only libc and the X11 stack every desktop Linux already has.
 
 ## macOS
 
-Install through Homebrew, which pulls `tcl-tk` (9.x) as a dependency:
+### Disk image
+
+Download `questlog-<version>-macos-arm64.dmg`, open it, and drag questlog to Applications.
+
+The app is signed ad-hoc rather than with an Apple Developer ID, and it is not notarized, so the first launch meets Gatekeeper: macOS reports that the app cannot be opened because Apple cannot check it for malicious software. Open it once from the context menu instead, which offers the override the double-click does not:
+
+```
+Control-click questlog in Applications -> Open -> Open
+```
+
+Every later launch is an ordinary double-click. To skip the prompt entirely, clear the quarantine flag the download attached:
+
+```
+xattr -dr com.apple.quarantine /Applications/questlog.app
+```
+
+Only Apple Silicon is published. On an Intel Mac, install through Homebrew below, or build the image from source with `zipfs/build-selfcontained.sh`.
+
+### Homebrew
+
+Homebrew pulls `tcl-tk` (9.x) as a dependency and installs questlog's scripts:
 
 ```
 brew tap overseers-desk/od
 brew install questlog
 ```
+
+### Single-file image
+
+`questlog-<version>-macos-arm64` is the same program without the bundle: no icon, no Finder launch, run from a terminal. The Gatekeeper note above applies to it too.
+
+## Windows
+
+Download `questlog-<version>-windows-x86_64.exe` and run it. There is nothing to install and no Tcl needed.
+
+The .exe is not signed with a code-signing certificate, so SmartScreen interposes on the first run with "Windows protected your PC". Choose **More info**, then **Run anyway**.
+
+questlog answers on the command line as well as in a window (`--json`, `--shortstat`, `--help`), and those answers print into the console it was started from. Started from Explorer it opens the window and prints nothing, which is what a double-click wants.
+
+Two things questlog does on Linux and macOS it does not do on Windows:
+
+- The Running filter is always empty. Claude Code records a live session's process id, and confirming that a process is still alive costs a console program on Windows, which would flash a console window over the app on every poll.
+- Resuming a session opens a Windows Terminal tab where Windows Terminal is installed, and a cmd window where it is not. It runs `claude`, so `claude` has to be on PATH.

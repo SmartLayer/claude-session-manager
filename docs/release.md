@@ -43,7 +43,9 @@ rpmbuild -ba questlog.spec
 
 ### Single-file images (CI)
 
-Self-contained executables that run on a host with no Tcl installed, one per platform. The `release-images` GitHub Actions workflow builds each from a static Tcl 9 + Tk + Thread (see `zipfs/build-selfcontained.sh`) and attaches it to the release. Coverage is linux x86_64, linux arm64, and macos arm64; macos x86_64 and windows are not built (see the workflow header for why).
+Self-contained executables that run on a host with no Tcl installed, one per platform. The `release-images` GitHub Actions workflow builds each from a static Tcl 9 + Tk + Thread (`zipfs/build-selfcontained.sh` on Unix, `zipfs/build-selfcontained.ps1` on Windows) and attaches it to the release. Coverage is linux x86_64, linux arm64, macos arm64 and windows x86_64; macos x86_64 is not built (see the workflow header for why).
+
+macOS carries two more assets built from the same image: `questlog.app` in a zip, and the `.dmg` a Mac user installs from. Both are signed ad-hoc, which is what lets an arm64 binary run at all once `mkimg` has appended its archive; neither is notarized, so a downloader meets Gatekeeper once. The Windows `.exe` is unsigned and meets SmartScreen once. [installation.md](installation.md) tells a user how to get past each.
 
 The workflow runs automatically when a release is published (see [Publish](#publish-the-github-release) below). To run the matrix manually, e.g. a dry run before tagging:
 
@@ -55,8 +57,9 @@ gh run watch          # follow the jobs to green
 For a local self-contained build on the current platform:
 
 ```bash
-zipfs/build-selfcontained.sh
-# produces dist/questlog-<VERSION>-<os>-<arch>
+zipfs/build-selfcontained.sh                 # Linux, macOS
+pwsh -File zipfs/build-selfcontained.ps1     # Windows
+# produces dist/questlog-<VERSION>-<os>-<arch>, and on macOS the .app and .dmg
 ```
 
 For a quick local image stubbed on the host `wish9.0` (so it still needs the Tcl 9 runtime present), `tclsh9.0 zipfs/build.tcl`. The version in the filename is read from the launcher, so there is nothing extra to bump.
@@ -110,3 +113,5 @@ Watch the single-file images land with `gh run watch`. If publishing is done thr
 - [ ] Debian package installs cleanly: `sudo apt install ./questlog_<VERSION>_all.deb`.
 - [ ] RPM installs cleanly: `sudo dnf install ./questlog-<VERSION>-1.noarch.rpm`.
 - [ ] Single-file image from the release runs on a host with no Tcl installed: `./questlog-<VERSION>-linux-x86_64 --version`, then launch the GUI.
+- [ ] macOS: the `.dmg` opens, the app drags to Applications, and it launches after one Control-click -> Open.
+- [ ] Windows: the `.exe` launches past SmartScreen, and `--version` prints into the console it was started from.
