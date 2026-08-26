@@ -337,6 +337,19 @@ set inflight_row [$s3 scan_one $inflight]
 check inflight_last_user  {just asked} [dict get $inflight_row last_user]
 check inflight_last_reply {}           [dict get $inflight_row last_reply]
 
+# Prompts sent one after another with no reply between them are one turn to the
+# turn count, but the reader's last word is the last of them, so that is what
+# the field holds. The harness's own user records (a slash-command echo here)
+# are not the reader's words and are passed over.
+set resend /tmp/questlog-test-projects/-home-test-code-foo/resend.jsonl
+set fh [open $resend w]
+chan configure $fh -encoding utf-8 -translation lf
+puts $fh {{"type":"user","message":{"role":"user","content":"first try"},"cwd":"/home/test/code/foo","timestamp":"2026-05-06T10:00:00.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"no wait, this instead"},"timestamp":"2026-05-06T10:00:30.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"},"timestamp":"2026-05-06T10:00:40.000Z"}}
+close $fh
+check resend_last_user {no wait, this instead} [dict get [$s3 scan_one $resend] last_user]
+
 $s3 destroy
 
 # ---- nturns and the cost turns count identically (F3) ---------------

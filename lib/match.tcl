@@ -82,17 +82,20 @@ proc ::questlog::match::last_seen {fh} {
     set ai_title ""
     set last_user ""
     set last_reply ""
-    set turnstate 1
     while {[chan gets $fh line] >= 0} {
         if {$line eq ""} continue
         if {[regexp {"agentName":"([^"]+)"} $line -> m]} { set agent_name $m }
         if {[regexp {"aiTitle":"([^"]+)"} $line -> m]} { set ai_title $m }
-        # The exchange the session ended on. A user turn starts a new one, so it
-        # drops the reply held for the previous turn; the reply is then the first
-        # text the assistant wrote after it, and stays "" while a turn is still
-        # in flight. count_turn_line is the one home for what a turn is, and it
-        # settles the same run state the row's turn count uses.
-        if {[::logman::count_turn_line $line turnstate]} {
+        # The exchange the session ended on. A typed prompt starts a new one, so
+        # it drops the reply held for the previous prompt; the reply is then the
+        # first text the assistant wrote after it, and stays "" while a turn is
+        # still in flight. is_user_turn is the one home for what counts as typed
+        # (it rejects the harness's own user records: hook feedback, slash-command
+        # echoes, tool results). Every typed prompt lands here, not only the ones
+        # the turn count counts: a reader who sent three messages before the
+        # assistant answered is shown the third, which is what the session's
+        # last word actually is.
+        if {[::logman::is_user_turn $line]} {
             if {![regexp {"content":"((?:[^"\\]|\\.)*)"} $line -> last_user]} {
                 regexp {"text":"((?:[^"\\]|\\.)*)"} $line -> last_user
             }
