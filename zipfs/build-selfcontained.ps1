@@ -155,12 +155,20 @@ Write-Host '== 4. custom wish =='
 $TclLib    = Find-StaticLib -Root $TclSrc    -Pattern 'tcl*s.lib'
 $TkLib     = Find-StaticLib -Root $TkSrc     -Pattern '*tk*s.lib'
 $ThreadLib = Find-StaticLib -Root $ThreadSrc -Pattern '*thread*.lib'
+# Tk's static library still reaches Tcl through the stubs table, so the stub
+# library joins the link exactly as libtclstub.a does on the Unix side.
+$StubLib   = Find-StaticLib -Root $TclSrc    -Pattern 'tclstub*.lib'
 $Wish = Join-Path $BuildDir 'questlog-wish.exe'
 
 # STATIC_BUILD switches tcl.h and tk.h from the stubs table to direct entry
 # points, which is what a statically linked interpreter needs.
+#
+# /MD selects the DLL C runtime, the half of OPTS=static,msvcrt that governs
+# this link: Tcl and Tk were compiled against it, and their objects call the
+# CRT through its import symbols. Linking them into a binary built for the
+# static CRT leaves every one of those unresolved.
 $clArgs = @(
-    '/nologo', '/O2', '/DSTATIC_BUILD', '/DUSE_TCL_STUBS=0', '/DUSE_TK_STUBS=0',
+    '/nologo', '/O2', '/MD', '/DSTATIC_BUILD', '/DUSE_TCL_STUBS=0', '/DUSE_TK_STUBS=0',
     "/I$(Join-Path $Stage 'include')",
     "/I$(Join-Path $TclSrc 'generic')",
     "/I$(Join-Path $TkSrc 'generic')",
@@ -169,7 +177,7 @@ $clArgs = @(
     (Join-Path $RepoRoot 'zipfs\appinit.c'),
     "/Fe:$Wish",
     '/link', '/SUBSYSTEM:WINDOWS', '/ENTRY:mainCRTStartup',
-    $TkLib, $TclLib, $ThreadLib,
+    $TkLib, $TclLib, $ThreadLib, $StubLib,
     'netapi32.lib', 'user32.lib', 'advapi32.lib', 'userenv.lib', 'ws2_32.lib',
     'gdi32.lib', 'comdlg32.lib', 'imm32.lib', 'comctl32.lib', 'shell32.lib',
     'uuid.lib', 'ole32.lib', 'oleaut32.lib'
