@@ -34,7 +34,9 @@ proc ::questlog::ui::terminal::permission_flags {mode} {
     }
 }
 
-# Detection order from design.md §Resume command and terminal integration:
+# Detection order, most specific evidence first: what the platform can only
+# have, then what the hosting terminal says about itself, then what is
+# installed.
 #   1. Windows: Windows Terminal if installed, else cmd.exe (always there)
 #   2. macOS: $TERM_PROGRAM -> iTerm2 if set, else Terminal.app (always there)
 #   3. $GNOME_TERMINAL_SERVICE  -> gnome-terminal
