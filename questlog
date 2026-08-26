@@ -245,12 +245,13 @@ proc questlog_forbid_ui {} {
     }
 }
 
-# Registering questlog with Claude Code keeps ~/.claude/commands/questlog.md
-# current, so a Claude Code session reaches for questlog when the user asks to
-# search a past session. It is a system-level install, unrelated to the
-# ~/.claude/projects store that lib/path.tcl guards, so it runs before any
-# library loads, using the native `file` command. The explicit subcommand writes
-# with feedback and exits; every other launch silently refreshes the copy.
+# Registering questlog with Claude Code keeps commands/questlog.md current under
+# the config directory claude_dir names, so a Claude Code session reaches for
+# questlog when the user asks to search a past session. It is a system-level
+# install, unrelated to the `projects/` store that lib/path.tcl guards, so it
+# runs before any library loads, using the native `file` command. The explicit
+# subcommand writes with feedback and exits; every other launch silently
+# refreshes the copy.
 source [file join $ROOT cli claude_command.tcl]
 source [file join $ROOT cli commandline.tcl]
 
