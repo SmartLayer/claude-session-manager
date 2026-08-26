@@ -51,7 +51,12 @@ if {$wish eq "" || ![file executable $wish]} {
 # Stage the archive contents. main.tcl and the launcher sit at the staging
 # root so that, post-strip, they land at //zipfs:/app/main.tcl and
 # //zipfs:/app/questlog (an mkimg image mounts at //zipfs:/app).
-set stage /tmp/questlog-zipfs-stage-[pid]
+# Staging root: TMPDIR on Unix, TEMP/TMP on Windows, /tmp where none is set.
+set tmpbase /tmp
+foreach v {TMPDIR TEMP TMP} {
+    if {[info exists ::env($v)] && $::env($v) ne ""} { set tmpbase $::env($v); break }
+}
+set stage [file join $tmpbase questlog-zipfs-stage-[pid]]
 file delete -force $stage
 file mkdir $stage
 file copy $launcher                       [file join $stage questlog]
@@ -76,19 +81,28 @@ set distdir [file join $repo dist]
 file mkdir $distdir
 switch -- $tcl_platform(os) {
     Darwin  { set os macos }
-    default { set os linux }
+    default {
+        set os [expr {$tcl_platform(platform) eq "windows" ? "windows" : "linux"}]
+    }
 }
-# Linux reports aarch64 where macOS reports arm64; normalise so an arm64 image
-# carries the same token on either OS.
-set arch [exec uname -m]
-if {$arch eq "aarch64"} { set arch arm64 }
-set out [file join $distdir "questlog-$ver-$os-$arch"]
+# One token per architecture across the three platforms: Linux says aarch64
+# where macOS says arm64, and Windows says amd64 where both others say x86_64.
+set arch [string tolower $tcl_platform(machine)]
+set arch [dict getdef {aarch64 arm64  amd64 x86_64  intel x86_64} $arch $arch]
+# Windows resolves an executable by extension, so the image is only runnable
+# with one; the other two platforms carry none.
+set ext [expr {$os eq "windows" ? ".exe" : ""}]
+set out [file join $distdir "questlog-$ver-$os-$arch$ext"]
 file delete -force $out
 
 # strip == stage makes archive paths root-relative; the stub wish provides the
 # Tk-capable interpreter.
 zipfs mkimg $out $stage $stage {} $wish
-file attributes $out -permissions 0755
+# Windows carries no permission bits on a file, and its `file attributes` has
+# no -permissions option at all, so setting the exec bit is a Unix step.
+if {$tcl_platform(platform) ne "windows"} {
+    file attributes $out -permissions 0755
+}
 file delete -force $stage
 
 puts "built $out"
