@@ -201,9 +201,23 @@ proc ::questlog::ui::session_actions::act_resume {ctx fork} {
     ::questlog::ui::terminal::launch_tab [tget $ctx cwd] [tget $ctx uuid] $fork
 }
 proc ::questlog::ui::session_actions::act_reveal {ctx} {
-    set dir [file join [::questlog::path::projects_root] [tget $ctx folder]]
-    set opener [expr {$::tcl_platform(os) eq "Darwin" ? "open" : "xdg-open"}]
-    if {[catch {exec $opener $dir &} err]} {
+    reveal_dir [file join [::questlog::path::projects_root] [tget $ctx folder]]
+}
+
+# Show a folder in the desktop's own file manager. Three menu entries reveal
+# one (a session's store folder, a subagent's, a project's working directory),
+# and each host reaches its file manager through here, so a platform is taught
+# once. nativename because Explorer reads a Windows path with backslashes,
+# and it leaves a Unix path as it stands.
+proc ::questlog::ui::session_actions::reveal_dir {dir} {
+    if {$::tcl_platform(platform) eq "windows"} {
+        set opener explorer
+    } elseif {$::tcl_platform(os) eq "Darwin"} {
+        set opener open
+    } else {
+        set opener xdg-open
+    }
+    if {[catch {exec $opener [file nativename $dir] &} err]} {
         puts stderr "questlog: $opener failed: $err"
     }
 }

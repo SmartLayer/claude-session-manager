@@ -35,14 +35,24 @@ proc ::questlog::ui::terminal::permission_flags {mode} {
 }
 
 # Detection order from design.md §Resume command and terminal integration:
-#   1. macOS: $TERM_PROGRAM -> iTerm2 if set, else Terminal.app (always there)
-#   2. $GNOME_TERMINAL_SERVICE  -> gnome-terminal
-#   3. $KONSOLE_VERSION         -> konsole
-#   4. parent process tree walk
-#   5. fall back to first installed: ptyxis, gnome-terminal, konsole, xterm
+#   1. Windows: Windows Terminal if installed, else cmd.exe (always there)
+#   2. macOS: $TERM_PROGRAM -> iTerm2 if set, else Terminal.app (always there)
+#   3. $GNOME_TERMINAL_SERVICE  -> gnome-terminal
+#   4. $KONSOLE_VERSION         -> konsole
+#   5. parent process tree walk
+#   6. fall back to first installed: ptyxis, gnome-terminal, konsole, xterm
 proc ::questlog::ui::terminal::detect {} {
     variable Detected
     if {$Detected ne ""} { return $Detected }
+
+    if {$::tcl_platform(platform) eq "windows"} {
+        # Windows Terminal ships with Windows 11 and is where a tab means
+        # anything; cmd.exe is the floor, present on every install, and opens
+        # a window instead. Neither reads an env var naming itself, so this
+        # asks what is installed rather than what is hosting us.
+        if {[auto_execok wt] ne ""} { return [set Detected wt] }
+        return [set Detected cmd]
+    }
 
     if {$::tcl_platform(os) eq "Darwin"} {
         if {[info exists ::env(TERM_PROGRAM)] \
@@ -105,6 +115,18 @@ proc ::questlog::ui::terminal::launch_tab {cwd uuid {fork 0}} {
     set extra [expr {$fork ? " --fork-session" : ""}]
     set inner "claude --resume $uuid$extra; exec bash"
     switch -- $t {
+        wt {
+            # `nt` is a new tab and `-w 0` puts it in the running window, so
+            # this matches the Linux tab behaviour. cmd /k holds the window
+            # open once claude exits, as `exec bash` does on the Unix side.
+            return [exec_ok wt -w 0 nt -d $cwd cmd /k "claude --resume $uuid$extra"]
+        }
+        cmd {
+            # `start` needs a window title as its first argument, or it reads
+            # a quoted command as one; the empty string is that placeholder.
+            return [exec_ok {*}[auto_execok start] "" cmd /k \
+                "cd /d [cmdquote $cwd] && claude --resume $uuid$extra"]
+        }
         ptyxis {
             return [exec_ok ptyxis --tab --working-directory=$cwd -- bash -c $inner]
         }
@@ -177,6 +199,13 @@ proc ::questlog::ui::terminal::exec_ok {args} {
 # Conservative shell-quote for a path that will appear inside a bash -c string.
 proc ::questlog::ui::terminal::shquote {s} {
     return '[string map {' '\\''} $s]'
+}
+
+# cmd.exe quoting for a path inside a /k command string. cmd has no escape for
+# a double quote within a quoted string, so a quote in the path is dropped
+# rather than escaped; a Windows path cannot contain one anyway.
+proc ::questlog::ui::terminal::cmdquote {s} {
+    return \"[string map [list \" ""] $s]\"
 }
 
 # AppleScript string literal: wrap in double quotes and escape \ and " only.

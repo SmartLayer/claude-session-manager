@@ -1752,11 +1752,7 @@ oo::class create ::questlog::ui::SessionList {
         my clipboard_set [::logman::last_assistant_text $ChildMenuPath]
     }
     method child_menu_reveal {} {
-        set dir [file dirname $ChildMenuPath]
-        set opener [expr {$::tcl_platform(os) eq "Darwin" ? "open" : "xdg-open"}]
-        if {[catch {exec $opener $dir &} err]} {
-            puts stderr "questlog: $opener failed: $err"
-        }
+        ::questlog::ui::session_actions::reveal_dir [file dirname $ChildMenuPath]
     }
 
     # Attach a subagent's matches to its parent session (issue #13 cases B and C).
@@ -2275,10 +2271,7 @@ oo::class create ::questlog::ui::SessionList {
     method folder_reveal {folder} {
         set cwd [{*}$ResolveFolder $folder]
         if {$cwd eq ""} return
-        set opener [expr {$::tcl_platform(os) eq "Darwin" ? "open" : "xdg-open"}]
-        if {[catch {exec $opener $cwd &} err]} {
-            puts stderr "questlog: $opener failed: $err"
-        }
+        ::questlog::ui::session_actions::reveal_dir $cwd
     }
 
     method toggle_folder {folder} {

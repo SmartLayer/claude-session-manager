@@ -72,6 +72,11 @@ proc ::questlog::ui::live::running_uuids {} {
 # parentheses, so anchor on the LAST ')': the remainder begins at field 3,
 # making field 22 the 20th token (index 19).
 #
+# Windows has neither /proc nor kill, and the one reader it does offer,
+# tasklist, is a console program: spawning it every poll would flash a console
+# window over the app twice a second. So Windows reports no session as
+# running, and the Running filter is empty there.
+#
 # Without /proc (macOS), fall back to a plain existence check via `kill -0`.
 # The recorded procStart is the platform's own start-time encoding and is
 # not re-derivable here, so the recycling guard is dropped: a pid reused
@@ -80,6 +85,7 @@ proc ::questlog::ui::live::running_uuids {} {
 # on whether the stat file is readable, not on the OS name, so the strict
 # path is taken wherever the kernel actually exposes it.
 proc ::questlog::ui::live::proc_alive_matching {pid procstart} {
+    if {$::tcl_platform(platform) eq "windows"} { return 0 }
     set p /proc/$pid/stat
     if {[file readable $p]} {
         if {[catch {open $p r} fh]} { return 0 }
