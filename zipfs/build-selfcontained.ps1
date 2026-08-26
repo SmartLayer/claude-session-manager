@@ -82,16 +82,32 @@ function Import-VsDevEnv {
     }
 }
 
-# Download and unpack one source tarball.
+# Download and unpack one source tarball. curl rather than Invoke-WebRequest,
+# so both platforms fetch through the same client and a download that behaves
+# on one behaves on the other; SourceForge answers a download URL with a
+# redirect to a mirror, and the two clients do not negotiate that alike.
+#
+# The unpack is guarded rather than left to fail on its own, because what
+# arrives when a mirror declines is a readable HTML page, and "unrecognized
+# archive format" three stages before the compiler says nothing about it.
 function Get-Source {
     param([string]$Url, [string]$OutFile)
     $dest = Join-Path $Src $OutFile
-    Invoke-WebRequest -Uri $Url -OutFile $dest -UseBasicParsing
+    Invoke-Checked -Exe 'curl.exe' -WorkDir $Src `
+        -Arguments @('-fsSL', '--retry', '3', '-o', $dest, $Url)
+    & tar tzf $dest > $null 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $size = (Get-Item $dest).Length
+        $head = (Get-Content $dest -TotalCount 5 -ErrorAction SilentlyContinue) -join "`n"
+        throw "$Url did not deliver a tarball ($size bytes). It begins:`n$head"
+    }
     Invoke-Checked -Exe 'tar' -Arguments @('xzf', $dest) -WorkDir $Src
 }
 
 # The one static .lib a stage produced, searched for by pattern because the
-# name carries the version and the build-type suffix.
+# name carries the version and the build-type suffix, and Tk and Thread each
+# prefix theirs with the Tcl generation. The largest match wins: a stage that
+# also leaves a stub library beside the real one leaves a far smaller file.
 function Find-StaticLib {
     param([string]$Root, [string]$Pattern)
     $hit = Get-ChildItem -Path $Root -Recurse -Filter $Pattern -ErrorAction SilentlyContinue |
@@ -134,7 +150,7 @@ Invoke-Checked -Exe 'nmake' -WorkDir (Join-Path $ThreadSrc 'win') `
 Write-Host '== 4. custom wish =='
 $TclLib    = Find-StaticLib -Root $TclSrc    -Pattern 'tcl*s.lib'
 $TkLib     = Find-StaticLib -Root $TkSrc     -Pattern '*tk*s.lib'
-$ThreadLib = Find-StaticLib -Root $ThreadSrc -Pattern 'thread*.lib'
+$ThreadLib = Find-StaticLib -Root $ThreadSrc -Pattern '*thread*.lib'
 $Wish = Join-Path $BuildDir 'questlog-wish.exe'
 
 # STATIC_BUILD switches tcl.h and tk.h from the stubs table to direct entry
