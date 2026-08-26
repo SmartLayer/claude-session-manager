@@ -1,5 +1,5 @@
 Name:           questlog
-Version:        1.2.0
+Version:        1.2.1
 Release:        1%{?dist}
 Summary:        GUI for finding, reading, and reopening past Claude Code sessions
 License:        MIT
@@ -60,6 +60,14 @@ install -D -m 0644 assets/questlog-512.png \
 %{_datadir}/icons/hicolor/512x512/apps/questlog.png
 
 %changelog
+* Wed Aug 26 2026 Weiwu Zhang <a@colourful.land> - 1.2.1-1
+- Packaging: macOS ships questlog.app inside a disk image and Windows a single .exe, each carrying its own Tcl 9; both are unsigned, so the first launch asks once
+- Windows: session resume opens a Windows Terminal tab or a cmd window, folder reveal opens Explorer, and the Running filter stays empty there
+- Session viewer: a dialogue view reads one side of the conversation; tables render as wrapping grids; the open transcript grows when a claude process outside questlog appends to it
+- Sessions list: a clipped row reveals itself beside the pointer; sessions arriving mid-scan surface without a relaunch; the browse scan and cost pass share one worker pool
+- Rates: a session on an unlisted model was costed at zero; every published Anthropic model is listed
+- Claude Code's configuration root is read from CLAUDE_CONFIG_DIR, then ~/.claude
+
 * Thu Jul 17 2026 Weiwu Zhang <a@colourful.land> - 1.2.0-1
 - Sessions list: the view filters move from the toolbar to the list's own strip as lenses (Running, Bookmarked, and a model checklist that excludes rather than chooses); an A/H multiplier column replaces H%; a Ctx% column shows how full a session sits if resumed; the first rows paint in under a second on a busy host
 - Session viewer: the transcript is a streaming document of foldable regions with Turns and Quotes index tabs; each assistant turn chipped with its model; tool results read as TOOL RESULT

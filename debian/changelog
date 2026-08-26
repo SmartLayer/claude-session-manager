@@ -1,3 +1,18 @@
+questlog (1.2.1) unstable; urgency=medium
+
+  * Packaging: macOS ships questlog.app inside a disk image, and Windows ships a single .exe; both carry their own Tcl 9, so neither host needs one installed. Each is unsigned by an authority the OS trusts, so the first launch asks once (Control-click -> Open on macOS, More info -> Run anyway on Windows).
+  * Windows: resuming a session opens a Windows Terminal tab, or a cmd window where Windows Terminal is absent, and revealing a folder opens Explorer. The Running filter stays empty there: confirming a process is alive costs a console program, and polling it would flash a console over the window.
+  * Session viewer: a dialogue view reads one side of the conversation on its own; tables render as embedded wrapping grids; the keys act from where the reader is looking; the open transcript grows when a claude process outside questlog appends to it.
+  * Sessions list: hovering a clipped row reveals it whole beside the pointer, ending on the session's last prompt; Return opens the selected session and Ctrl+R copies its resume command; sessions that arrive mid-scan surface without a relaunch; a moved session keeps its place, its totals and its subagents.
+  * Sessions list: the browse scan and the cost pass share one persistent worker pool, rows land in sliced batches, and folder counts, sizes and costs derive when a heading is drawn.
+  * Toolbar: the time row takes a typed count of hours or days beside its presets.
+  * Rates: a session on a model the price table did not list was costed at zero; every published Anthropic model is listed, claude-sonnet-5 among them.
+  * Claude Code's configuration root is read from CLAUDE_CONFIG_DIR where it is set, and ~/.claude otherwise, so a moved root moves every surface that reads it.
+  * Turn counting agrees with what the viewer shows: drafts of one message count once, and a harness record wearing a prompt's shape is not a turn.
+  * Modules: the session-driver harness publishes as coachman, transcript semantics as logman and linesman, the transcript view as showman, and the query surface as querybuilder and searchfield; every package installs them.
+
+ -- Weiwu Zhang <a@colourful.land>  Wed, 26 Aug 2026 00:00:00 +0000
+
 questlog (1.2.0) unstable; urgency=medium
 
   * Sessions list: the view filters leave the toolbar for the list's own strip as lenses - Running and Bookmarked latch independently (both on means the rows that are both), and a Model checklist excludes models rather than choosing one; a count says what an active lens hides from the search's cut; an expand-all button heads the strip.
