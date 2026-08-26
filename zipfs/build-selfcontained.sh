@@ -136,4 +136,28 @@ cp "$TCLLIB_SRC"/modules/json/*.tcl "$RUNTIME/tcl_library/json/"
 QUESTLOG_WISH="$WISH" QUESTLOG_RUNTIME="$RUNTIME" \
     "$STAGE/bin/tclsh${TCL_VER%.*}" "$REPO_ROOT/zipfs/build.tcl"
 
+# The launcher is the version's one home; build.tcl reads it the same way, so
+# the filename this script reconstructs is the one build.tcl just wrote.
+VERSION="$(sed -n 's/^set QUESTLOG_VERSION[[:space:]]*\([^[:space:]]*\).*/\1/p' "$REPO_ROOT/questlog")"
+ARCH="$(uname -m)"
+if [ "$ARCH" = "aarch64" ]; then ARCH=arm64; fi
+
+if [ "$OS" = "Darwin" ]; then
+    IMAGE="$REPO_ROOT/dist/questlog-$VERSION-macos-$ARCH"
+    # mkimg appended the archive to a linked Mach-O, which voids the ad-hoc
+    # signature the linker applied; Apple Silicon then refuses to exec it.
+    # Re-signing covers the file as it now stands, appended archive included.
+    echo "== 6. ad-hoc signature =="
+    codesign --force --sign - --timestamp=none "$IMAGE"
+    # The image must still be able to find its own archive: a signature is
+    # written at the end of the file, and zipfs locates the archive by scanning
+    # back from there for the zip directory. --version answers without a
+    # display, so it exercises exec, mount and startup on a headless runner.
+    "$IMAGE" --version
+
+    echo "== 7. app bundle and dmg =="
+    "$REPO_ROOT/zipfs/macos-bundle.sh" "$IMAGE" "$VERSION" "$ARCH"
+    "$REPO_ROOT/dist/questlog.app/Contents/MacOS/questlog" --version
+fi
+
 echo "done. Keep \$BUILD_DIR for reuse, or rm -rf $BUILD_DIR"
