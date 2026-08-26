@@ -46,17 +46,15 @@ It links only libc and the X11 stack every desktop Linux already has.
 
 Download `questlog-<version>-macos-arm64.dmg`, open it, and drag questlog to Applications.
 
-The app is signed ad-hoc rather than with an Apple Developer ID, and it is not notarized, so the first launch meets Gatekeeper: macOS reports that the app cannot be opened because Apple cannot check it for malicious software. Open it once from the context menu instead, which offers the override the double-click does not:
+The first launch reports that questlog is damaged and should be moved to the Trash. The download is not damaged. macOS attaches a quarantine flag to anything fetched from the web, and an app that carries no signature it can check fails that check with this wording. questlog carries none: the single-file image is built by appending an archive to the interpreter, and `codesign` refuses to sign a file of that shape at all, whether ad-hoc or with an Apple Developer ID.
 
-```
-Control-click questlog in Applications -> Open -> Open
-```
-
-Every later launch is an ordinary double-click. To skip the prompt entirely, clear the quarantine flag the download attached:
+Clear the quarantine flag once, and every later launch is an ordinary double-click:
 
 ```
 xattr -dr com.apple.quarantine /Applications/questlog.app
 ```
+
+Control-click -> Open does not help here. That override answers "unidentified developer", which is a different verdict from this one.
 
 Only Apple Silicon is published. On an Intel Mac, install through Homebrew below, or build the image from source with `zipfs/build-selfcontained.sh`.
 
@@ -71,7 +69,11 @@ brew install questlog
 
 ### Single-file image
 
-`questlog-<version>-macos-arm64` is the same program without the bundle: no icon, no Finder launch, run from a terminal. The Gatekeeper note above applies to it too.
+`questlog-<version>-macos-arm64` is the same program without the bundle: no icon, no Finder launch, run from a terminal. Quarantine applies to it too, so clear it the same way:
+
+```
+xattr -d com.apple.quarantine questlog-<version>-macos-arm64
+```
 
 ## Windows
 
