@@ -1,16 +1,17 @@
 # Build the self-contained single-file image per platform and attach each to
-# the GitHub release. See zipfs/build-selfcontained.sh for the build recipe.
+# the GitHub release. See zipfs/build-selfcontained.sh for the Unix build
+# recipe and zipfs/build-selfcontained.ps1 for the Windows one.
 #
 # Coverage:
 #   - linux x86_64 / arm64: validated locally on x86_64; the script is the same
 #     on both.
-#   - macos arm64: the script's Aqua branch, validated through these CI runs.
+#   - macos arm64: the script's Aqua branch. Ships three files - the bare
+#     image, questlog.app, and the dmg a Mac user installs from.
+#   - windows x86_64: the nmake build.
 # Not covered:
 #   - macos x86_64: hosted Intel runners (macos-13) do not get allocated, so a
 #     run sits queued until the 24h limit cancels it. The arm64 job exercises
 #     the same Aqua branch; revisit Intel during the cross-platform work.
-#   - windows-x86_64: blocked by questlog itself. ui/terminal.tcl has no
-#     Windows branch (issue #10); the port lands before a Windows variant.
 #
 # Trigger manually, or automatically when a release is published; in the latter
 # case each artifact is uploaded to that release.
@@ -31,9 +32,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04,     ostoken: linux, arch: x86_64 }
-          - { os: ubuntu-24.04-arm, ostoken: linux, arch: arm64 }
-          - { os: macos-14,         ostoken: macos, arch: arm64 }
+          - { os: ubuntu-24.04,     ostoken: linux,   arch: x86_64 }
+          - { os: ubuntu-24.04-arm, ostoken: linux,   arch: arm64 }
+          - { os: macos-14,         ostoken: macos,   arch: arm64 }
+          - { os: windows-2022,     ostoken: windows, arch: x86_64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -47,34 +49,80 @@ jobs:
             libx11-dev libxext-dev libxft-dev libfontconfig1-dev \
             libxss-dev zlib1g-dev
 
-      - name: Build self-contained image
+      - name: Build self-contained image (Unix)
+        if: runner.os != 'Windows'
         run: zipfs/build-selfcontained.sh
 
-      - name: Smoke-test the image
+      - name: Build self-contained image (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: zipfs/build-selfcontained.ps1
+
+      - name: Smoke-test the image (Linux)
+        if: runner.os == 'Linux'
         run: |
-          img=$(ls dist/questlog-*-${{ matrix.ostoken }}-${{ matrix.arch }})
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get install -y --no-install-recommends xvfb
-            # A bogus TCL_LIBRARY proves the image uses its own embedded library.
-            TCL_LIBRARY=/nonexistent TK_LIBRARY=/nonexistent \
-              xvfb-run -a "$img" --version
-          else
-            # Hosted macOS runners have no window server, so a Tk launch cannot
-            # be exercised here; verify the binary is self-contained instead.
-            if otool -L "$img" | grep -Eiq 'libtcl|libtk9|libthread'; then
-              echo "image links a Tcl/Tk/Thread shared library:"; otool -L "$img"; exit 1
-            fi
-            echo "macOS self-containment OK; GUI launch deferred to a host with a window server"
+          img=$(ls dist/questlog-*-linux-${{ matrix.arch }})
+          sudo apt-get install -y --no-install-recommends xvfb
+          # A bogus TCL_LIBRARY proves the image uses its own embedded library.
+          TCL_LIBRARY=/nonexistent TK_LIBRARY=/nonexistent \
+            xvfb-run -a "$img" --version
+
+      - name: Smoke-test the image (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          img=$(ls dist/questlog-*-macos-${{ matrix.arch }})
+          if otool -L "$img" | grep -Eiq 'libtcl|libtk9|libthread'; then
+            echo "image links a Tcl/Tk/Thread shared library:"; otool -L "$img"; exit 1
           fi
+          # The build already ran --version through both the bare image and the
+          # bundled copy, and verified the signature; that is what proves the
+          # ad-hoc signature holds and the appended archive is still reachable
+          # behind it. Left here: that the dmg mounts and carries a runnable app.
+          dmg=$(ls dist/questlog-*-macos-${{ matrix.arch }}.dmg)
+          hdiutil attach -readonly -nobrowse -mountpoint /tmp/qlmnt "$dmg"
+          test -x /tmp/qlmnt/questlog.app/Contents/MacOS/questlog
+          hdiutil detach /tmp/qlmnt
+
+      - name: Smoke-test the image (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $img = (Get-ChildItem dist\questlog-*-windows-${{ matrix.arch }}.exe)[0].FullName
+          # The image is linked for the windows subsystem, so a caller does not
+          # wait on it and its output needs somewhere to land: Start-Process
+          # supplies both. A bogus TCL_LIBRARY proves the embedded library is
+          # what the interpreter reads.
+          $env:TCL_LIBRARY = 'C:\nonexistent'
+          $env:TK_LIBRARY  = 'C:\nonexistent'
+          $p = Start-Process -FilePath $img -ArgumentList '--version' -Wait -PassThru `
+                 -NoNewWindow -RedirectStandardOutput version.txt -RedirectStandardError version.err
+          Get-Content version.txt, version.err
+          if ($p.ExitCode -ne 0) { throw "questlog --version exited $($p.ExitCode)" }
+          if (-not (Select-String -Path version.txt -Pattern '\d+\.\d+\.\d+' -Quiet)) {
+            throw 'questlog --version printed no version'
+          }
+
+      - name: Package the macOS app for upload
+        if: runner.os == 'macOS'
+        # A .app is a directory, and upload-artifact would flatten it; zipping
+        # it here keeps the bundle intact, and a zip is what a release asset
+        # has to be anyway.
+        run: |
+          cd dist
+          ver=$(ls questlog-*-macos-${{ matrix.arch }} | sed 's/^questlog-\(.*\)-macos-.*/\1/')
+          zip -qry "questlog-$ver-macos-${{ matrix.arch }}-app.zip" questlog.app
 
       - uses: actions/upload-artifact@v4
         with:
           name: questlog-${{ matrix.ostoken }}-${{ matrix.arch }}
-          path: dist/questlog-*-${{ matrix.ostoken }}-${{ matrix.arch }}
+          path: dist/questlog-*-${{ matrix.ostoken }}-${{ matrix.arch }}*
           if-no-files-found: error
 
       - name: Attach to release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/questlog-*-${{ matrix.ostoken }}-${{ matrix.arch }} --clobber
+        shell: bash
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/questlog-*-${{ matrix.ostoken }}-${{ matrix.arch }}* --clobber
