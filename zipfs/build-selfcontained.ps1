@@ -14,8 +14,9 @@
 #     override drops the console while leaving appinit.c's plain main() intact,
 #     so one source file serves all three platforms.
 #   - the system libraries Tcl and Tk call into (sockets, shell, common
-#     controls) are named here, because a static build resolves them at our
-#     link rather than inside a DLL of its own.
+#     controls, the print spooler Tk's GDI code opens) are named here, because
+#     a static build resolves them at our link rather than inside a DLL of its
+#     own.
 #
 # The .exe is unsigned. SmartScreen will interpose on first run for anything
 # downloaded without a code-signing certificate; docs/installation.md says so
@@ -180,7 +181,7 @@ $clArgs = @(
     $TkLib, $TclLib, $ThreadLib, $StubLib,
     'netapi32.lib', 'user32.lib', 'advapi32.lib', 'userenv.lib', 'ws2_32.lib',
     'gdi32.lib', 'comdlg32.lib', 'imm32.lib', 'comctl32.lib', 'shell32.lib',
-    'uuid.lib', 'ole32.lib', 'oleaut32.lib'
+    'uuid.lib', 'ole32.lib', 'oleaut32.lib', 'winspool.lib'
 )
 Invoke-Checked -Exe 'cl' -Arguments $clArgs -WorkDir $BuildDir
 if (-not (Test-Path $Wish)) { throw "custom wish was not produced at $Wish" }
