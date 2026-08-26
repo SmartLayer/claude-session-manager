@@ -60,7 +60,7 @@ proc ::questlog::path::pretty_home {path} {
 
 # Root of the on-disk Claude session store.
 proc ::questlog::path::projects_root {} {
-    return [file join [file home] .claude projects]
+    return [file join [::questlog::config::claude_dir] projects]
 }
 
 # The directory questlog was launched from. Prefer the shell's logical

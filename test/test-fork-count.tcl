@@ -21,6 +21,7 @@ set FOLDER "-tmp-proj"
 set PROJDIR [file join $SAND .claude projects $FOLDER]
 ::file mkdir $PROJDIR
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
 ::tcl::tm::path add [file join $ROOT modules]

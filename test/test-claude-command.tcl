@@ -8,6 +8,7 @@
 package require Tcl 9
 
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
+set ::questlog_config_only 1; source [file join $ROOT questlog]
 source [file join $ROOT cli claude_command.tcl]
 
 set failures 0
@@ -47,6 +48,7 @@ check "COMMAND ends with a single trailing newline" \
 set base [file join /tmp questlog-claude-test-[pid]]
 file delete -force $base
 set saved_home [expr {[info exists ::env(HOME)] ? $::env(HOME) : ""}]
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc use_home {dir} {
     set ::env(HOME) $dir

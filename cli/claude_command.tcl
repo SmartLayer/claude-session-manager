@@ -2,7 +2,8 @@ package require Tcl 9
 
 # Install and keep current the questlog command for Claude Code.
 #
-# This writes a Claude Code *command* (~/.claude/commands/questlog.md), not a
+# This writes a Claude Code *command* (commands/questlog.md under the config
+# directory CLAUDE_CONFIG_DIR names, or ~/.claude), not a
 # skill: a user's skills directory is often a curated, version-controlled tree,
 # and a tool writing into it would pollute that repository, whereas the commands
 # directory is the conventional home for a tool to register itself. COMMAND below
@@ -13,8 +14,8 @@ package require Tcl 9
 # same-named skill, if the user keeps one, supersedes the command and the refresh
 # leaves it alone.
 #
-# Registering the command has nothing to do with the session store under
-# ~/.claude/projects that lib/path.tcl guards, so the launcher sources this file
+# Registering the command has nothing to do with the session store under the
+# same config directory that lib/path.tcl guards, so the launcher sources this file
 # and runs refresh/install before path.tcl renames `file`; the native command is
 # used directly here.
 
@@ -94,25 +95,19 @@ Emits session and subagent counts, turns, token categories, and total cost over 
 To reopen a found session, give the user the resume command `cd <project_path> && claude --resume <uuid>`, where `project_path` is the folder object's `project_path` value (empty when the original directory no longer exists - then omit the cd) and `uuid` the session's from a `--json` hit; append `--fork-session` to branch instead of continue. `questlog rename <session.jsonl> [title]` sets a session's title, and an empty or omitted title reverts it to the auto title.
 }
 
-# ~/.claude, or "" when HOME is unknown.
-proc ::questlog::claude::claude_dir {} {
-    if {[catch {file home} home] || $home eq ""} { return "" }
-    return [file join $home .claude]
-}
-
 proc ::questlog::claude::command_file {} {
-    return [file join [claude_dir] commands questlog.md]
+    return [file join [::questlog::config::claude_dir] commands questlog.md]
 }
 
 # A same-named skill, if the user keeps one, supersedes the command.
 proc ::questlog::claude::skill_dir {} {
-    return [file join [claude_dir] skills questlog]
+    return [file join [::questlog::config::claude_dir] skills questlog]
 }
 
-# True when Claude Code is absent (no ~/.claude), or a same-named skill
-# supersedes the command.
+# True when Claude Code is absent (no config directory on disk), or a same-named
+# skill supersedes the command.
 proc ::questlog::claude::superseded {} {
-    set base [claude_dir]
+    set base [::questlog::config::claude_dir]
     return [expr {$base eq "" || ![file isdirectory $base]
         || [file isdirectory [skill_dir]]}]
 }
@@ -134,7 +129,7 @@ proc ::questlog::claude::_read {path} {
     return $text
 }
 
-# Keep ~/.claude/commands/questlog.md equal to COMMAND. Silent, idempotent, and
+# Keep the installed commands/questlog.md equal to COMMAND. Silent, idempotent, and
 # best-effort: a missing Claude Code install or a same-named skill is left alone,
 # and a write failure (read-only home, etc.) does not disturb the launch.
 proc ::questlog::claude::refresh {} {
@@ -149,7 +144,7 @@ proc ::questlog::claude::refresh {} {
 # with a printed result.
 proc ::questlog::claude::install {} {
     if {[superseded]} {
-        puts "Skipped: Claude Code is not installed (no ~/.claude), or a\
+        puts "Skipped: Claude Code is not installed (no config directory), or a\
             same-named skill supersedes the command."
         return
     }

@@ -31,7 +31,7 @@ namespace eval ::questlog::ui::live {
 # search: a session running right now is here whether or not the search's
 # window would have loaded its file.
 proc ::questlog::ui::live::running_sessions {} {
-    set dir [file join [file home] .claude sessions]
+    set dir [file join [::questlog::config::claude_dir] sessions]
     if {![file isdirectory $dir]} { return [dict create] }
     set out [dict create]
     foreach f [glob -nocomplain -directory $dir -- *.json] {

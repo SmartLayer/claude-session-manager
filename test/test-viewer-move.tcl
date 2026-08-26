@@ -35,6 +35,7 @@ foreach f {lib/debug.tcl lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.t
 set SAND [file join [pwd] _viewermove_sandbox]
 ::questlog::path::_real_file delete -force $SAND
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 proc write_session {path prompts cwd ts} {

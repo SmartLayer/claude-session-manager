@@ -32,6 +32,7 @@ foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
 set DIRA [file join $SAND .claude projects $FA]
 ::questlog::path::_real_file mkdir $DIRA
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 proc session_moment {days_ago} { return [expr {[clock seconds] - $days_ago*24*3600}] }

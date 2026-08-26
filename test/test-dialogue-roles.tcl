@@ -27,6 +27,7 @@ source [file join $ROOT cli commandline.tcl]
 set TMP /tmp/questlog-dialogue-roles-test
 set CORPUS [file join $TMP .claude projects]
 set ::env(HOME) $TMP
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 ::questlog::path::_real_file delete -force $TMP
 set FOLDER [file join $CORPUS -home-test-code-proj]
 ::questlog::path::_real_file mkdir $FOLDER

@@ -5,6 +5,7 @@
 
 package require Tcl 9
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
+set ::questlog_config_only 1; source [file join $ROOT questlog]
 source [file join $ROOT lib path.tcl]
 source [file join $ROOT ui live.tcl]
 
@@ -40,6 +41,7 @@ check dead_pid       0 [::questlog::ui::live::proc_alive_matching $deadpid $myst
 
 # ---- running_uuids over a synthetic registry -----------------------
 set ::env(HOME) /tmp/questlog-test-live-home
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 ::questlog::path::_real_file delete -force /tmp/questlog-test-live-home
 set sdir /tmp/questlog-test-live-home/.claude/sessions
 ::questlog::path::_real_file mkdir $sdir

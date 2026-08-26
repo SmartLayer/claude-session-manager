@@ -202,6 +202,24 @@ proc ::questlog::config::get {key} {
     return [dict get $Config $key]
 }
 
+# Claude Code's configuration directory, the root under which it keeps
+# `projects/` (the session store questlog reads), `sessions/` (the live-session
+# registry) and `commands/`. CLAUDE_CONFIG_DIR moves that root wherever the user
+# points it; without it the harness's own default, ~/.claude, holds. "" when
+# neither is available, which the callers read as "Claude Code is not here".
+#
+# It sits with the config for the same reason the config does: every surface
+# needs it before its own module loads - the command install runs before
+# lib/path.tcl is sourced, and a config-only source stops just below this line.
+# One home, so a machine that moves the root moves every reader of it at once.
+proc ::questlog::config::claude_dir {} {
+    if {[info exists ::env(CLAUDE_CONFIG_DIR)] && $::env(CLAUDE_CONFIG_DIR) ne ""} {
+        return $::env(CLAUDE_CONFIG_DIR)
+    }
+    if {[catch {file home} home] || $home eq ""} { return "" }
+    return [file join $home .claude]
+}
+
 # The suite and the isolated CLI workers need these defaults without running the
 # app: each sets ::questlog_config_only and sources this file, taking the config
 # namespace and stopping here. The guard is the price of config having no home

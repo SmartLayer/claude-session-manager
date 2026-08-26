@@ -53,6 +53,7 @@ proc check {name got want} {
 }
 
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 proc ql {mode args} {
     global QL
     if {$mode eq "serial"} { set ::env(QUESTLOG_THREADS) 0 } else { unset -nocomplain ::env(QUESTLOG_THREADS) }

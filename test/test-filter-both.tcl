@@ -70,6 +70,7 @@ set THIRDDIR [file join $SAND .claude projects $THIRD]
 ::questlog::path::_real_file mkdir $OTHERDIR
 ::questlog::path::_real_file mkdir $THIRDDIR
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 

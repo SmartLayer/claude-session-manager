@@ -18,6 +18,7 @@ set ROOT [file dirname [file dirname [file normalize [info script]]]]
 set TMP /tmp/questlog-caps-test
 set CORPUS [file join $TMP .claude projects]
 set ::env(HOME) $TMP
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 file delete -force $TMP
 set FOLDER [file join $CORPUS -home-test-code-proj]
 file mkdir $FOLDER

@@ -66,6 +66,7 @@ set FA -home-test-code-foo
 set DIRA [file join $SAND .claude projects $FA]
 ::questlog::path::_real_file mkdir $DIRA
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc write_session {path} {
     set fh [open $path w]

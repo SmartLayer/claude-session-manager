@@ -33,6 +33,7 @@ foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
 set DIRA [file join $SAND .claude projects $FA]
 ::questlog::path::_real_file mkdir $DIRA
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 # The panel is timed: it appears once the pointer has rested on the row. A test
 # has no pointer to rest, so the delay goes to zero and an update runs the show

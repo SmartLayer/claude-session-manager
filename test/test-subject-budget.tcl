@@ -32,6 +32,7 @@ foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl \
 set SAND [file join [pwd] _subjectbudget_sandbox]
 ::questlog::path::_real_file delete -force $SAND
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 set SL [::questlog::ui::SessionList new .s noop noop noop noop noop noop noop \

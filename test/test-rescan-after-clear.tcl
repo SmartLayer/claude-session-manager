@@ -31,6 +31,7 @@ foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
 
 ::questlog::path::_real_file delete -force $SAND
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 # Trap the background error the scan coroutine would raise on the stale id, so
 # the failure is observable instead of only landing on stderr.

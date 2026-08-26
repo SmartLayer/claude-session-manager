@@ -64,7 +64,7 @@ write_session DDDD [list [prompt 12 "spawn"] [assistant d1 12 1000000]]
 write_subagent DDDD 1 [list [prompt 03 "child work"] [assistant d1s 03 600000]]
 
 # ---- run A: windowed json, no clauses ------------------------------------
-set out [exec env HOME=$HOME $QL --json --accrued-cost --since 2026-06-01 --until 2026-06-05]
+set out [exec env -u CLAUDE_CONFIG_DIR HOME=$HOME $QL --json --accrued-cost --since 2026-06-01 --until 2026-06-05]
 set cost [dict create]
 set subs [dict create]
 foreach fdata [::json::json2dict $out] {
@@ -82,14 +82,14 @@ check "DDDD in-window subagent counted (\$3)" \
     [near [dict get [lindex [dict get $subs DDDD] 0] cost_usd] 3.0] 1
 
 # ---- run A totals via shortstat ------------------------------------------
-set ss [exec env HOME=$HOME $QL --shortstat --accrued-cost --since 2026-06-01 --until 2026-06-05]
+set ss [exec env -u CLAUDE_CONFIG_DIR HOME=$HOME $QL --shortstat --accrued-cost --since 2026-06-01 --until 2026-06-05]
 regexp {sessions\s+(\d+)} $ss -> n_sess
 regexp {total cost\s+\$([0-9.]+)} $ss -> tot
 check "shortstat sessions = 3 (AAAA, BBBB, DDDD; CCCC dropped)" $n_sess 3
 check "shortstat total = 5 + 2 + 3 = \$10" [near $tot 10.0] 1
 
 # ---- run B: clauses still filter -----------------------------------------
-set ss [exec env HOME=$HOME $QL --shortstat --accrued-cost --since 2026-06-01 --until 2026-06-05 --keyword wombatxyz]
+set ss [exec env -u CLAUDE_CONFIG_DIR HOME=$HOME $QL --shortstat --accrued-cost --since 2026-06-01 --until 2026-06-05 --keyword wombatxyz]
 regexp {sessions\s+(\d+)} $ss -> n_sess
 regexp {total cost\s+\$([0-9.]+)} $ss -> tot
 check "clause narrows to the one matching session" $n_sess 1

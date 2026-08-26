@@ -22,6 +22,7 @@ check encode_simple   "-home-alice-code-foo"        [::questlog::path::encode_cw
 
 # pretty_home: abbreviate $HOME, leave non-home paths alone.
 set ::env(HOME) /home/alice
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 check pretty_under   "~/code/foo"        [::questlog::path::pretty_home "/home/alice/code/foo"]
 check pretty_exact   "~"                 [::questlog::path::pretty_home "/home/alice"]
 check pretty_other   "/tmp/x"            [::questlog::path::pretty_home "/tmp/x"]

@@ -30,6 +30,7 @@ foreach f [list $FOLDER1 $FOLDER2] {
     ::questlog::path::_real_file mkdir [file join $SAND .claude projects $f]
 }
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 

@@ -35,6 +35,7 @@ set DIRB [file join $SAND .claude projects $FB]
 ::questlog::path::_real_file mkdir $DIRA
 ::questlog::path::_real_file mkdir $DIRB
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 

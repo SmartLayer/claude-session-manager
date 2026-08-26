@@ -47,6 +47,7 @@ set TMP /tmp/questlog-diff-test
 set CORPUS [file join $TMP .claude projects]
 proc ::questlog::path::projects_root {} { return $::CORPUS }
 set ::env(HOME) $TMP
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 set fails 0
 proc check {name expected actual} {

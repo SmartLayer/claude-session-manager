@@ -55,6 +55,7 @@ set OTHERDIR [file join $SAND .claude projects $OTHER]
 ::questlog::path::_real_file mkdir $PROJDIR
 ::questlog::path::_real_file mkdir $OTHERDIR
 set ::env(HOME) $SAND
+unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
 
 proc noop {args} {}
 
