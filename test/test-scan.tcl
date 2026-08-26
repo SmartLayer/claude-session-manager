@@ -307,6 +307,36 @@ puts $fh {{"type":"agent-name","agentName":"near-named","sessionId":"near"}}
 close $fh
 check slug_near_title near-named [dict get [$s3 scan_one $near] slug]
 
+# ---- the exchange the session ended on ------------------------------
+# The row carries the last user prompt and the head of the reply to it, read in
+# the same tail sweep as the title. It is what the list's hover reveal shows: a
+# long session's opening prompt says where it began, this says where it got to.
+# A turn still in flight has no reply yet, and the field stays empty rather than
+# reaching back to an older one.
+set exch /tmp/questlog-test-projects/-home-test-code-foo/exchange.jsonl
+set fh [open $exch w]
+chan configure $fh -encoding utf-8 -translation lf
+puts $fh {{"type":"user","message":{"role":"user","content":"opening question"},"cwd":"/home/test/code/foo","timestamp":"2026-05-04T10:00:00.000Z"}}
+puts $fh {{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]},"timestamp":"2026-05-04T10:00:05.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"closing question"},"timestamp":"2026-05-04T10:01:00.000Z"}}
+puts $fh {{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"last answer"}]},"timestamp":"2026-05-04T10:01:05.000Z"}}
+close $fh
+set exch_row [$s3 scan_one $exch]
+check exchange_first_user {opening question} [dict get $exch_row first_user]
+check exchange_last_user  {closing question} [dict get $exch_row last_user]
+check exchange_last_reply {last answer}      [dict get $exch_row last_reply]
+
+set inflight /tmp/questlog-test-projects/-home-test-code-foo/inflight.jsonl
+set fh [open $inflight w]
+chan configure $fh -encoding utf-8 -translation lf
+puts $fh {{"type":"user","message":{"role":"user","content":"opening question"},"cwd":"/home/test/code/foo","timestamp":"2026-05-05T10:00:00.000Z"}}
+puts $fh {{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]},"timestamp":"2026-05-05T10:00:05.000Z"}}
+puts $fh {{"type":"user","message":{"role":"user","content":"just asked"},"timestamp":"2026-05-05T10:01:00.000Z"}}
+close $fh
+set inflight_row [$s3 scan_one $inflight]
+check inflight_last_user  {just asked} [dict get $inflight_row last_user]
+check inflight_last_reply {}           [dict get $inflight_row last_reply]
+
 $s3 destroy
 
 # ---- nturns and the cost turns count identically (F3) ---------------

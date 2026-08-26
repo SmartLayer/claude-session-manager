@@ -23,6 +23,7 @@ namespace eval ::questlog::ui::reveal {
     variable Win ""      ;# the panel toplevel, "" until the first reveal builds it
     variable Head ""     ;# the bold heading line, packed only when a reveal has one
     variable Lbl ""      ;# the wrapping body label
+    variable Sub ""      ;# the muted trailing paragraph, packed only when a reveal has one
     variable Timer ""    ;# the armed show, cancelled by a leave that beats it
     # Long enough that sweeping the pointer across rows on the way somewhere
     # else reveals nothing, short enough to feel like part of the hover.
@@ -30,16 +31,18 @@ namespace eval ::questlog::ui::reveal {
 }
 
 # Arm a reveal of $text, under the optional heading $head - the row's name, or a
-# snippet's badge word, whatever names the thing being revealed. The panel
-# appears once the pointer has rested for the delay; hide cancels it. Empty text
-# and no heading reveals nothing, so a caller with no stored string does not
-# have to test for one.
-proc ::questlog::ui::reveal::show {text {head ""}} {
+# snippet's badge word, whatever names the thing being revealed - and above the
+# optional $sub, a second paragraph in the muted grey the list gives an answer
+# (a session row puts its last prompt in $text and the head of the reply in
+# $sub). The panel appears once the pointer has rested for the delay; hide
+# cancels it. Empty text and no heading reveals nothing, so a caller with no
+# stored string does not have to test for one.
+proc ::questlog::ui::reveal::show {text {head ""} {sub ""}} {
     variable Timer
     variable DelayMs
     hide
     if {$text eq "" && $head eq ""} return
-    set Timer [after $DelayMs [namespace code [list place $text $head]]]
+    set Timer [after $DelayMs [namespace code [list place $text $head $sub]]]
 }
 
 proc ::questlog::ui::reveal::hide {} {
@@ -59,12 +62,14 @@ proc ::questlog::ui::reveal::shown {} {
     variable Win
     variable Head
     variable Lbl
+    variable Sub
     if {$Win eq "" || ![winfo exists $Win] || ![winfo ismapped $Win]} { return "" }
-    set head [$Head cget -text]
-    set body [$Lbl cget -text]
-    if {$head eq ""} { return $body }
-    if {$body eq ""} { return $head }
-    return "$head\n$body"
+    set lines [list]
+    foreach w [list $Head $Lbl $Sub] {
+        set t [$w cget -text]
+        if {$t ne ""} { lappend lines $t }
+    }
+    return [join $lines "\n"]
 }
 
 # Build the panel on first use. Deferred rather than built at startup so a
@@ -73,6 +78,7 @@ proc ::questlog::ui::reveal::build {} {
     variable Win
     variable Head
     variable Lbl
+    variable Sub
     if {$Win ne "" && [winfo exists $Win]} return
     set Win .qlreveal
     destroy $Win
@@ -95,21 +101,28 @@ proc ::questlog::ui::reveal::build {} {
         -background [::questlog::ui::theme::c chip_bg] \
         -foreground [::questlog::ui::theme::c body] \
         -font QLList -padx 6 -pady 3 -wraplength $wrap
+    set Sub $Win.s
+    label $Sub -justify left -anchor w \
+        -background [::questlog::ui::theme::c chip_bg] \
+        -foreground [::questlog::ui::theme::c muted] \
+        -font QLList -padx 6 -pady 0 -wraplength $wrap
     $Win configure -background [::questlog::ui::theme::c ctrl_border_hi]
     # The toplevel's own background showing through a one-pixel inset is the
     # panel's border: a label -borderwidth draws a relief, not a hairline.
     pack $Head -fill x -padx 1 -pady {3 0}
     pack $Lbl -fill both -expand 1 -padx 1 -pady {0 1}
+    pack $Sub -fill x -padx 1 -pady {0 3}
 }
 
 # Place the panel below-right of the pointer, pulled back inside the screen
 # where it would otherwise run off the right edge or the bottom. The offsets
 # ride the list font's line height, so they keep clear of the cursor at the
 # high display scalings this app is used at.
-proc ::questlog::ui::reveal::place {text {head ""}} {
+proc ::questlog::ui::reveal::place {text {head ""} {sub ""}} {
     variable Win
     variable Head
     variable Lbl
+    variable Sub
     variable Timer
     set Timer ""
     build
@@ -119,6 +132,8 @@ proc ::questlog::ui::reveal::place {text {head ""}} {
     $Head configure -text $head
     if {$head eq ""} { pack forget $Head } else { pack $Head -fill x -padx 1 -pady {1 0} -before $Lbl }
     $Lbl configure -text $text
+    $Sub configure -text $sub
+    if {$sub eq ""} { pack forget $Sub } else { pack $Sub -fill x -padx 1 -pady {0 3} -after $Lbl }
     update idletasks
     set w [winfo reqwidth $Win]
     set h [winfo reqheight $Win]

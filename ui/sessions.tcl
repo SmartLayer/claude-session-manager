@@ -148,7 +148,7 @@ oo::class create ::questlog::ui::SessionList {
     variable ScanBusy         ;# 1 while the corpus scan is in flight (scan_begin..scan_end)
     variable OnSubagents      ;# cb: parent path -> list of child row dicts
     variable OnSubagentCost   ;# cb: child path -> start the cost pass for it
-    variable PeekByTag        ;# dict: row tag -> {kind text}; hover reveal and hit menu resolve from it at event time
+    variable PeekByTag        ;# dict: row tag -> {kind text cursor sub}; hover reveal and hit menu resolve from it at event time
 
     # on_widen is optional: without it the cut banner still names what the search
     # left behind and still offers to load it (that is this object's own doing),
@@ -1095,6 +1095,11 @@ oo::class create ::questlog::ui::SessionList {
         # bookmarked by reconcile_one; the rest are set-at-scan and static.
         set bkmk  [dict getdef $row bookmarked [file executable $path]]
         set fuser [dict getdef $row first_user ""]
+        # The exchange the session ended on, for the row's hover reveal: what a
+        # reader wants in order to tell two sessions apart is where each got to,
+        # which the opening prompt stops saying after the first few turns.
+        set luser [dict getdef $row last_user ""]
+        set lrepl [dict getdef $row last_reply ""]
         set okind [dict getdef $row kind ""]
         set fcwd  [dict getdef $row folder_cwd ""]
         set chint [dict getdef $row cwd_hint ""]
@@ -1110,6 +1115,7 @@ oo::class create ::questlog::ui::SessionList {
             turns $turns duration_secs $dsecs human_secs $hsecs model $model \
             context_pct $ctxp \
             bookmarked $bkmk first_user $fuser kind $okind folder_cwd $fcwd \
+            last_user $luser last_reply $lrepl \
             cwd_hint $chint nturns $ntrn input_tokens $itok output_tokens $otok \
             cache_write_tokens $cwtok cache_read_tokens $crtok \
             model_breakdown $mbrk \
@@ -2072,8 +2078,13 @@ oo::class create ::questlog::ui::SessionList {
         if {$label ne $full_label} { set clipped 1 }
         append subj $label
         # A name long enough to be cut is the reason a reader cannot tell two
-        # rows apart, so a cut title run carries the reveal: the name leads it
-        # and the first-prompt preview follows. An untrimmed row shows all it
+        # rows apart, so a cut title run carries the reveal: the name leads it,
+        # then the exchange the session ended on - its last prompt and the head
+        # of the reply to it - which says where the session got to, where the
+        # row's own preview is the opening prompt and stops saying that after
+        # the first few turns. A session too young to have finished a turn has
+        # no reply yet, and a row with neither falls back to the preview the row
+        # shows, so the reveal is never empty. An untrimmed row shows all it
         # has and wires nothing. The run gets a tag of its own rather than
         # riding the row's ($stag already binds <Enter>/<Leave> for the cursor
         # and the ⋯ brightening, which peek_wire would overwrite), minted here
@@ -2088,7 +2099,9 @@ oo::class create ::questlog::ui::SessionList {
             set ntag "t#$node"
             lappend tags [list $ntag $title_off \
                               [expr {[string length $subj] - $title_off}]]
-            my peek_wire $ntag $full_slug $full_label 0
+            set body [dict getdef $s last_user ""]
+            if {$body eq ""} { set body $full_label }
+            my peek_wire $ntag $full_slug $body 0 [dict getdef $s last_reply ""]
         }
         append subj $count_str
         # Dim the title run (slug and preview, past the marker gutter) when only
@@ -2865,9 +2878,9 @@ oo::class create ::questlog::ui::SessionList {
     # manages the cursor for itself (a session header, whose ⋯ cell brightens
     # on the row's own <Enter>) - there a <Leave> for the inner run would put the
     # arrow back while the pointer is still on the row.
-    method peek_enter {kind text {cursor 1}} {
+    method peek_enter {kind text {cursor 1} {sub ""}} {
         if {$cursor} { $Text configure -cursor hand2 }
-        ::questlog::ui::reveal::show $text $kind
+        ::questlog::ui::reveal::show $text $kind $sub
     }
     method peek_leave {{cursor 1}} {
         if {$cursor} { $Text configure -cursor arrow }
@@ -2892,8 +2905,8 @@ oo::class create ::questlog::ui::SessionList {
     # waits in PeekByTag and is resolved when the event fires; a tag with no
     # entry (swept, or cleared by reset) still swaps the cursor and reveals
     # nothing.
-    method peek_wire {tag kind text {cursor 1}} {
-        dict set PeekByTag $tag [list $kind $text $cursor]
+    method peek_wire {tag kind text {cursor 1} {sub ""}} {
+        dict set PeekByTag $tag [list $kind $text $cursor $sub]
         $Text tag bind $tag <Enter> [list [self] peek_enter_tag $tag]
         $Text tag bind $tag <Leave> [list [self] peek_leave $cursor]
     }
@@ -2902,8 +2915,8 @@ oo::class create ::questlog::ui::SessionList {
             $Text configure -cursor hand2
             return
         }
-        lassign [dict get $PeekByTag $tag] kind text cursor
-        my peek_enter $kind $text $cursor
+        lassign [dict get $PeekByTag $tag] kind text cursor sub
+        my peek_enter $kind $text $cursor $sub
     }
 
     # Resolve a drag point to the folder under it: the base class maps the point to a

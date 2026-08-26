@@ -182,6 +182,7 @@ proc ::questlog::search::build_clauses {snapshot} {
         tree [::questlog::match::tnode_and $andnodes] \
         nocase [expr {!$search_case}] \
         turn_count_cap [::questlog::config::get turn_count_cap] \
+        tail_window_bytes [::questlog::config::get tail_window_bytes] \
         first_user_cap [::questlog::config::get first_user_cap]]
 }
 

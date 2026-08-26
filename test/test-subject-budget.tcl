@@ -138,12 +138,24 @@ proc reveal_entry {res} {
 }
 set LONGSLUG [string repeat x 200]
 set LONGLABEL "make the retry backoff exponential and log every attempt it makes"
+set LASTU "and now drop the jitter"
+set LASTR "Dropped. The backoff is now a plain doubling from 1s."
+set res [subject_at [dict create slug $LONGSLUG count 0 sub_total 0 \
+             has_subagents 0 label $LONGLABEL \
+             last_user $LASTU last_reply $LASTR] 300]
+lassign [reveal_entry $res] rkind rtext rcursor rsub
+check "a cut row reveals the whole name" $rkind $LONGSLUG
+check "a cut row reveals the last prompt, not the first" $rtext $LASTU
+check "a cut row reveals the reply to it" $rsub $LASTR
+check "the title run leaves the cursor to the row" $rcursor 0
+
+# A session with no finished exchange yet has nothing to say about where it got
+# to, so the reveal falls back to the preview the row itself shows.
 set res [subject_at [dict create slug $LONGSLUG count 0 sub_total 0 \
              has_subagents 0 label $LONGLABEL] 300]
-lassign [reveal_entry $res] rkind rtext rcursor
-check "a cut row reveals the whole name" $rkind $LONGSLUG
-check "a cut row reveals the whole preview" $rtext $LONGLABEL
-check "the title run leaves the cursor to the row" $rcursor 0
+lassign [reveal_entry $res] rkind rtext rcursor rsub
+check "with no last prompt the reveal falls back to the row's preview" $rtext $LONGLABEL
+check "with no reply the reveal carries none" $rsub ""
 
 set res [subject_at [dict create slug "quick fix" count 0 sub_total 0 \
              has_subagents 0 label "short one"] 600]

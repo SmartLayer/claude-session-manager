@@ -70,19 +70,42 @@ proc ::questlog::match::opener_kind {line} {
     return [expr {[regexp {"type":"queue-operation"} $line] ? "sdk" : "cli"}]
 }
 
-# Read from the channel's current position to EOF and return the LAST agentName
-# and aiTitle seen, as {agent_name ai_title}; "" for either that never appears.
-# The single home for the slug field regexes and their last-wins rule, used by
-# scan_file's browse tail read and its full-file fallback.
-proc ::questlog::match::last_titles {fh} {
+# Read from the channel's current position to EOF and return the state the
+# session ended in: {agent_name ai_title last_user last_reply}, each "" where
+# the sweep never saw one. The last agentName and aiTitle win (a rename appends,
+# so the name in force is the last one written); the exchange is the last user
+# prompt and the head of the reply to it. The single home for these field
+# regexes and their last-wins rule, used by scan_file's tail read and its
+# full-file fallback.
+proc ::questlog::match::last_seen {fh} {
     set agent_name ""
     set ai_title ""
+    set last_user ""
+    set last_reply ""
+    set turnstate 1
     while {[chan gets $fh line] >= 0} {
         if {$line eq ""} continue
         if {[regexp {"agentName":"([^"]+)"} $line -> m]} { set agent_name $m }
         if {[regexp {"aiTitle":"([^"]+)"} $line -> m]} { set ai_title $m }
+        # The exchange the session ended on. A user turn starts a new one, so it
+        # drops the reply held for the previous turn; the reply is then the first
+        # text the assistant wrote after it, and stays "" while a turn is still
+        # in flight. count_turn_line is the one home for what a turn is, and it
+        # settles the same run state the row's turn count uses.
+        if {[::logman::count_turn_line $line turnstate]} {
+            if {![regexp {"content":"((?:[^"\\]|\\.)*)"} $line -> last_user]} {
+                regexp {"text":"((?:[^"\\]|\\.)*)"} $line -> last_user
+            }
+            set last_reply ""
+            continue
+        }
+        if {$last_reply eq "" && [string first {"type":"assistant"} $line] >= 0} {
+            if {[regexp {"text":"((?:[^"\\]|\\.)*)"} $line -> t] && $t ne ""} {
+                set last_reply $t
+            }
+        }
     }
-    return [list $agent_name $ai_title]
+    return [list $agent_name $ai_title $last_user $last_reply]
 }
 
 # A short window of $s that leads with the first match of $pat: snippet_lead
@@ -354,7 +377,8 @@ proc ::questlog::match::leaf_name_hit {leaf names nocase} {
 # The one session-row extractor (issue #30), reading a file once for both the
 # browse and the search pass. Returns {row matches}:
 #   row     the unified row dict - path mtime size folder uuid first_ts nturns
-#           kind first_user slug ai_title has_subagents bookmarked cwd_hint
+#           kind first_user last_user last_reply slug ai_title has_subagents
+#           bookmarked cwd_hint
 #           is_child parent_path parent_uuid - or "" if $path could not be opened
 #           or the scan was cancelled. is_first is the caller's to derive (per
 #           session, across files), so it is not set here.
@@ -550,6 +574,8 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
     set users 0
     set turnstate 1          ;# count_turn_line's run state, one file's worth
     set first_user ""
+    set last_user ""
+    set last_reply ""
     set cwd_hint ""
     set first_ts ""
     set kind ""
@@ -737,11 +763,11 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
         set do_row 0
         set do_leaves 1
     }
-    # Title: the search pass has the current agentName/aiTitle from its whole-file
-    # forward sweep; the browse pass early-broke, so it reads them from a tail
+    # The session's end state: its title, and the exchange it ended on. The
+    # browse pass early-broke on the turn cap, so it reads both from a tail
     # window (with a whole-file fallback when the latest title sits further back
     # than tail_window_bytes or before the forward break). Slug priority is
-    # agentName over aiTitle, unchanged.
+    # agentName over aiTitle.
     if {!$matching} {
         if {[catch {file size $path} fsz]} { set fsz 0 }
         set tail_start [expr {$fsz - [dict getdef $clauses tail_window_bytes 0]}]
@@ -750,11 +776,26 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
             chan seek $fh $tail_start
             chan gets $fh _
         }
-        lassign [::questlog::match::last_titles $fh] agent_name ai_title
+        lassign [::questlog::match::last_seen $fh] \
+            agent_name ai_title last_user last_reply
         if {$agent_name eq "" && $ai_title eq ""} {
             chan seek $fh 0
-            lassign [::questlog::match::last_titles $fh] agent_name ai_title
+            lassign [::questlog::match::last_seen $fh] \
+                agent_name ai_title last_user last_reply
         }
+    } else {
+        # The search pass swept the whole file forward and holds the titles, but
+        # it kept no exchange (the row fields it gathers are the ones every row
+        # needs, and the reveal's are read off the tail like the browse pass's).
+        if {[catch {file size $path} fsz]} { set fsz 0 }
+        set tail_start [expr {$fsz - [dict getdef $clauses tail_window_bytes 0]}]
+        if {$tail_start > 0} {
+            chan seek $fh $tail_start
+            chan gets $fh _
+        } else {
+            chan seek $fh 0
+        }
+        lassign [::questlog::match::last_seen $fh] _ _ last_user last_reply
     }
     close $fh
     if {[catch {file mtime $path} mt]} { set mt 0 }
@@ -780,6 +821,10 @@ proc ::questlog::match::scan_file {path clauses {tick ""} {yield_lines 0}} {
         nturns [expr {$cap > 0 ? min($users, $cap) : $users}] \
         kind [expr {$kind eq "" ? "cli" : $kind}] \
         first_user [::questlog::match::clean_preview $first_user \
+            [dict getdef $clauses first_user_cap 0]] \
+        last_user [::questlog::match::clean_preview $last_user \
+            [dict getdef $clauses first_user_cap 0]] \
+        last_reply [::questlog::match::clean_preview $last_reply \
             [dict getdef $clauses first_user_cap 0]] \
         slug $slug \
         ai_title $ai_title \
