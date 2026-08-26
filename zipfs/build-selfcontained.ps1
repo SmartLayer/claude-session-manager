@@ -197,9 +197,20 @@ $jsonDir = Join-Path $Runtime 'tcl_library\json'
 New-Item -ItemType Directory -Force -Path $jsonDir | Out-Null
 Copy-Item -Force (Join-Path $TcllibSrc 'modules\json\*.tcl') $jsonDir
 
-$tclsh = Get-ChildItem -Path (Join-Path $Stage 'bin') -Filter 'tclsh*.exe' |
-    Select-Object -First 1
-if (-not $tclsh) { throw "no tclsh under $Stage\bin" }
+# The interpreter that runs build.tcl: it needs zipfs and nothing else, so
+# either the installed copy or the one left in the build tree serves. Install
+# is asked first, the build tree second, because a static build does not
+# always leave an interpreter under the install prefix.
+$tclsh = @(
+    Get-ChildItem -Path $Stage  -Recurse -Filter 'tclsh*.exe' -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $TclSrc -Recurse -Filter 'tclsh*.exe' -ErrorAction SilentlyContinue
+) | Select-Object -First 1
+if (-not $tclsh) {
+    $seen = (Get-ChildItem -Path $Stage -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FullName }) -join "`n"
+    throw "no tclsh under $Stage or $TclSrc. Executables installed:`n$seen"
+}
+Write-Host "  interpreter $($tclsh.FullName)"
 
 $env:QUESTLOG_WISH = $Wish
 $env:QUESTLOG_RUNTIME = $Runtime
