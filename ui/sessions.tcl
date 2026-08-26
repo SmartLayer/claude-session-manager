@@ -148,8 +148,6 @@ oo::class create ::questlog::ui::SessionList {
     variable ScanBusy         ;# 1 while the corpus scan is in flight (scan_begin..scan_end)
     variable OnSubagents      ;# cb: parent path -> list of child row dicts
     variable OnSubagentCost   ;# cb: child path -> start the cost pass for it
-    variable OnStatusPeek     ;# cb: text -> reveal it on the app's bottom strip, or ""
-    variable OnStatusUnpeek   ;# cb: {} -> restore the strip's standing text, or ""
     variable PeekByTag        ;# dict: row tag -> {kind text}; hover reveal and hit menu resolve from it at event time
 
     # on_widen is optional: without it the cut banner still names what the search
@@ -160,7 +158,7 @@ oo::class create ::questlog::ui::SessionList {
                  on_drop_move on_bookmark_toggle on_bookmark_set on_rename \
                  on_scan_path cancel_cb \
                  on_subagents on_subagent_cost \
-                 {on_widen ""} {on_status_peek ""} {on_status_unpeek ""} \
+                 {on_widen ""} \
                  {on_folder_bound ""} {on_filter_change ""}} {
         set Top $parent
         set ResolveFolder $resolve_cb
@@ -175,8 +173,6 @@ oo::class create ::questlog::ui::SessionList {
         set OnSubagents $on_subagents
         set OnSubagentCost $on_subagent_cost
         set OnWiden $on_widen
-        set OnStatusPeek $on_status_peek
-        set OnStatusUnpeek $on_status_unpeek
         set OnFolderBound $on_folder_bound
         set OnFilterChange $on_filter_change
         set PeekByTag [dict create]
@@ -254,11 +250,11 @@ oo::class create ::questlog::ui::SessionList {
         set FolderNode [dict create]
         set PathNode [dict create]
         set TagNode [dict create]
-        # A wholesale clear can delete the hovered snippet out from under a
-        # parked pointer; a peek must not outlive its row, and Tk is not
-        # guaranteed to synthesize the <Leave>.
+        # A wholesale clear can delete the hovered row out from under a parked
+        # pointer; a reveal must not outlive its row, and Tk is not guaranteed
+        # to synthesize the <Leave>.
         set PeekByTag [dict create]
-        if {$OnStatusUnpeek ne ""} { {*}$OnStatusUnpeek }
+        ::questlog::ui::reveal::hide
     }
 
     # ---- public payload accessors (white-box tests, and any caller that
@@ -494,6 +490,10 @@ oo::class create ::questlog::ui::SessionList {
         # <Configure> relayout hook, the selection suppression and TailMark);
         # the session-domain tags, sort header and menus go on top of it.
         my build_body
+        # A click acts on the row under the pointer and usually opens it; the
+        # panel would otherwise hang over the result until the pointer moved off
+        # the row. Widget-level, so it fires whichever row tag handles the click.
+        bind $Text <ButtonPress> +[list ::questlog::ui::reveal::hide]
         my configure_tags
         my build_header
         my build_menu
@@ -2057,15 +2057,39 @@ oo::class create ::questlog::ui::SessionList {
         # metadata stop, and the row's tab stops cascade off their columns.
         set fixed [my title_gutter_w]
         incr fixed [font measure QLList $count_str]
+        set full_slug $slug
+        set clipped 0
         if {$slug ne ""} {
             set slug [my truncate_px $slug [expr {$max - $fixed}] QLBold]
+            if {$slug ne $full_slug} { set clipped 1 }
             lappend tags [list slug [string length $subj] [string length $slug]]
             append subj $slug
             append subj "  "
             incr fixed [expr {[font measure QLBold $slug] + [font measure QLList "  "]}]
         }
-        append subj [my truncate_px [dict get $s label] \
-                         [expr {$max - $fixed}] QLList]
+        set full_label [dict get $s label]
+        set label [my truncate_px $full_label [expr {$max - $fixed}] QLList]
+        if {$label ne $full_label} { set clipped 1 }
+        append subj $label
+        # A name long enough to be cut is the reason a reader cannot tell two
+        # rows apart, so a cut title run carries the reveal: the name leads it
+        # and the first-prompt preview follows. An untrimmed row shows all it
+        # has and wires nothing. The run gets a tag of its own rather than
+        # riding the row's ($stag already binds <Enter>/<Leave> for the cursor
+        # and the ⋯ brightening, which peek_wire would overwrite), minted here
+        # rather than in wire_session_row because a rename redraws the row
+        # through item, which does not re-run on_row_rendered. The name is the
+        # node's, not a fresh mint: a running row redraws on every glyph tick,
+        # and a minted tag per redraw would pile entries up in PeekByTag for the
+        # life of the window. t# is its own tag family, swept like the n# hit
+        # tags and the c# subagent ones but apart from them, so a title run is
+        # never mistaken for a hit by anything that resolves a hit's tag.
+        if {$clipped} {
+            set ntag "t#$node"
+            lappend tags [list $ntag $title_off \
+                              [expr {[string length $subj] - $title_off}]]
+            my peek_wire $ntag $full_slug $full_label 0
+        }
         append subj $count_str
         # Dim the title run (slug and preview, past the marker gutter) when only
         # the subagents matched; the running/bookmark glyphs keep their own colour.
@@ -2379,7 +2403,8 @@ oo::class create ::questlog::ui::SessionList {
     # Their reveal-registry entries go with them.
     method sweep_loose_tags {} {
         foreach tg [$Text tag names] {
-            if {([string match "n#*" $tg] || [string match "c#*" $tg]) \
+            if {([string match "n#*" $tg] || [string match "c#*" $tg] \
+                 || [string match "t#*" $tg]) \
                 && [llength [$Text tag ranges $tg]] == 0} {
                 $Text tag delete $tg
                 dict unset PeekByTag $tg
@@ -2825,25 +2850,28 @@ oo::class create ::questlog::ui::SessionList {
         my action_set_bright $path [my is_selected $path]
     }
 
-    # Hovering a snippet (or a subagent header) both swaps the cursor to the hand
-    # and reveals the row's full text on the app's bottom strip. The rendered row
-    # is clipped at the list column's right edge (-wrap none); $text is the
-    # model's full stored snippet (itself a lead/trail window around the hit),
-    # captured when the row was wired, so the reader sees the trailing context
-    # past the edge without opening the session. $kind
-    # is the badge word (tool_use, name, an agent type) and leads the reveal when
-    # present, so the strip reads e.g. "tool_use · <full line>". <Leave> restores
-    # the strip's standing text. No-op reveal when the app wired no peek callback
-    # (a bare SessionList in a test), so the cursor swap always stands alone.
-    method peek_enter {kind text} {
-        $Text configure -cursor hand2
-        if {$OnStatusPeek eq ""} return
-        if {$kind ne ""} { set text "$kind · $text" }
-        {*}$OnStatusPeek $text
+    # Hovering a clipped row reveals its full text on the panel beside the
+    # pointer. The rendered row is cut at the list column's right edge
+    # (-wrap none); $text is the model's full stored string - a snippet's
+    # lead/trail window around the hit, a session's name and preview - captured
+    # when the row was wired, so the reader sees what ran past the edge without
+    # opening the session. $kind heads the reveal when present: the badge word
+    # for a snippet (tool_use, name, an agent type), the session's own name for
+    # a header row, so the panel carries what the run is called above what it
+    # says.
+    #
+    # $cursor is 1 where the hovered run is the whole clickable row and the hand
+    # is this binding's to set, 0 where the run sits inside a row that already
+    # manages the cursor for itself (a session header, whose ⋯ cell brightens
+    # on the row's own <Enter>) - there a <Leave> for the inner run would put the
+    # arrow back while the pointer is still on the row.
+    method peek_enter {kind text {cursor 1}} {
+        if {$cursor} { $Text configure -cursor hand2 }
+        ::questlog::ui::reveal::show $text $kind
     }
-    method peek_leave {} {
-        $Text configure -cursor arrow
-        if {$OnStatusUnpeek ne ""} { {*}$OnStatusUnpeek }
+    method peek_leave {{cursor 1}} {
+        if {$cursor} { $Text configure -cursor arrow }
+        ::questlog::ui::reveal::hide
     }
 
     # Double the percents in data bound into a bind script. bind runs its
@@ -2864,18 +2892,18 @@ oo::class create ::questlog::ui::SessionList {
     # waits in PeekByTag and is resolved when the event fires; a tag with no
     # entry (swept, or cleared by reset) still swaps the cursor and reveals
     # nothing.
-    method peek_wire {tag kind text} {
-        dict set PeekByTag $tag [list $kind $text]
+    method peek_wire {tag kind text {cursor 1}} {
+        dict set PeekByTag $tag [list $kind $text $cursor]
         $Text tag bind $tag <Enter> [list [self] peek_enter_tag $tag]
-        $Text tag bind $tag <Leave> [list [self] peek_leave]
+        $Text tag bind $tag <Leave> [list [self] peek_leave $cursor]
     }
     method peek_enter_tag {tag} {
         if {![dict exists $PeekByTag $tag]} {
             $Text configure -cursor hand2
             return
         }
-        lassign [dict get $PeekByTag $tag] kind text
-        my peek_enter $kind $text
+        lassign [dict get $PeekByTag $tag] kind text cursor
+        my peek_enter $kind $text $cursor
     }
 
     # Resolve a drag point to the folder under it: the base class maps the point to a

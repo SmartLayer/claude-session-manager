@@ -24,7 +24,7 @@ set ::questlog_config_only 1; source [file join $ROOT questlog]
 foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl \
            lib/listfilter.tcl lib/match.tcl ui/terminal.tcl \
            ui/live.tcl lib/scan.tcl lib/search.tcl ui/drag.tcl ui/toolbar.tcl \
-           ui/sessions.tcl} {
+           ui/reveal.tcl ui/sessions.tcl} {
     source [file join $ROOT $f]
 }
 ::questlog::ui::theme::init
@@ -35,7 +35,7 @@ set ::env(HOME) $SAND
 
 proc noop {args} {}
 set SL [::questlog::ui::SessionList new .s noop noop noop noop noop noop noop \
-            noop noop noop noop noop noop noop]
+            noop noop noop noop noop]
 
 set fails 0
 proc check {name got want} {
@@ -120,6 +120,33 @@ set run_px [expr {[font measure QLList $spine] \
                   + [font measure QLBold $atype] + [font measure QLList [string trimright $rest]]}]
 check "long agent_type is ellipsised" [string index $atype end] $ELLIP
 check "child visible run fits the 300px budget" [expr {$run_px <= $MAX}] 1
+
+# ---- case 4: a cut title run carries the hover reveal ----------------------
+# What the row cannot show, the hover shows: a trimmed row wires a t# tag over
+# the title run and parks the whole name and preview in the reveal registry, so
+# the reader reaches them without opening the session. A row that fits shows all
+# it has and wires nothing.
+proc reveal_entry {res} {
+    foreach r [dict get $res tags] {
+        lassign $r tag off len
+        if {[string match "t#*" $tag]} {
+            return [dict get [set [info object namespace $::SL]::PeekByTag] $tag]
+        }
+    }
+    return ""
+}
+set LONGSLUG [string repeat x 200]
+set LONGLABEL "make the retry backoff exponential and log every attempt it makes"
+set res [subject_at [dict create slug $LONGSLUG count 0 sub_total 0 \
+             has_subagents 0 label $LONGLABEL] 300]
+lassign [reveal_entry $res] rkind rtext rcursor
+check "a cut row reveals the whole name" $rkind $LONGSLUG
+check "a cut row reveals the whole preview" $rtext $LONGLABEL
+check "the title run leaves the cursor to the row" $rcursor 0
+
+set res [subject_at [dict create slug "quick fix" count 0 sub_total 0 \
+             has_subagents 0 label "short one"] 600]
+check "an untrimmed row wires no reveal" [reveal_entry $res] ""
 
 ::questlog::path::_real_file delete -force $SAND
 if {$fails > 0} {

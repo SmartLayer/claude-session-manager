@@ -109,6 +109,9 @@ oo::class create ::questlog::ui::Viewer {
     variable Sections        ;# list of dicts: {kind label start_idx end_idx}
     variable Text             ;# the text widget
     variable Sb               ;# the transcript's scrollbar (alias, like Text)
+    variable NameLabel        ;# header label showing the loaded session's name
+    variable NameFull         ;# full session name, kept for re-elision and the hover reveal
+    variable NameCut          ;# 1 while the strip is showing less than the whole name
     variable PathLabel        ;# header label showing the loaded session's cwd
     variable IdLabel          ;# header label showing the abbreviated session id
     variable ActionMenu       ;# the "⋯" head-strip menu (Font, and Stage 2 actions)
@@ -305,8 +308,10 @@ oo::class create ::questlog::ui::Viewer {
     # Load a session and anchor to a line (1-based; 0 means top). Replaces
     # whatever was shown before. `query` is the active search ({terms <list>
     # nocase 0|1}, or {}); its terms are matched literally, highlighted, and
-    # listed in the docked match index band.
-    method show {jsonl_path {scroll_to_line 0} {query {}}} {
+    # listed in the docked match index band. `name` is the session's name for
+    # the strip; the caller holds it already (the list keeps it in its store),
+    # and the strip shows the cwd alone when there is none.
+    method show {jsonl_path {scroll_to_line 0} {query {}} {name ""}} {
         # Leaving a session mid-stream detaches its turn (it finishes on disk and
         # reloads on next open) and folds the prompt bar away, like find_hide.
         # The bar is reset for the new session; a detached run never touches
@@ -342,6 +347,7 @@ oo::class create ::questlog::ui::Viewer {
         set shown_dir [expr {$Cwd ne "" ? $Cwd : [file dirname $Path]}]
         set CwdFull [::questlog::path::pretty_home $shown_dir]
         my elide_cwd
+        my set_name $name
         $IdLabel configure -text \
             "[string range $Uuid 0 3]…[string range $Uuid end-3 end]"
         my find_hide 0
@@ -403,8 +409,27 @@ oo::class create ::questlog::ui::Viewer {
                          count ""]]
         frame $Top.head -background $strip
         pack $Top.head -side top -fill x
+        # The session's name, the thing that identifies it to a reader, ahead of
+        # the cwd it ran in. Both labels expand, so they share the strip's slack
+        # and give way together as the pane narrows; both cut their text
+        # themselves, Tk labels having no ellipsis of their own. -width 1 is what
+        # makes the sharing even: a label asks for the width of its text, so two
+        # expanders would divide the slack left over after the longer one was
+        # served whole - and a label that cuts its own text to fit then asks for
+        # less on the next pass, and less again, until it has cut itself down to
+        # the ellipsis. Asking for one character each, they split the strip.
+        label $Top.head.name -text "" -background $strip -anchor w -font QLBold \
+            -width 1 -foreground [::questlog::ui::theme::c sessionhead]
+        pack $Top.head.name -side left -padx {6 0} -pady 1 -fill x -expand 1
+        set NameLabel $Top.head.name
+        set NameFull ""
+        set NameCut 0
+        bind $NameLabel <Configure> [list [self] elide_name]
+        bind $NameLabel <Enter> [list [self] reveal_name]
+        bind $NameLabel <Leave> [list ::questlog::ui::reveal::hide]
         label $Top.head.path -text "no session selected" -background $strip \
-            -anchor w -font QLMono -foreground [::questlog::ui::theme::c muted]
+            -anchor w -width 1 -font QLMono \
+            -foreground [::questlog::ui::theme::c muted]
         pack $Top.head.path -side left -padx 6 -pady 1 -fill x -expand 1
         set PathLabel $Top.head.path
         # The cwd can outrun the strip; Tk labels do not ellipsize, so re-elide
@@ -464,7 +489,7 @@ oo::class create ::questlog::ui::Viewer {
             label $CollapseBtn -text "◫" -background $strip -cursor hand2 \
                 -foreground [::questlog::ui::theme::c muted]
         }
-        pack $CollapseBtn -side left -padx {6 2} -before $Top.head.path
+        pack $CollapseBtn -side left -padx {6 2} -before $Top.head.name
         bind $CollapseBtn <Button-1> [list [self] do_toggle]
 
         # Body: a vertical paned split. The docked index band is its top pane
@@ -995,6 +1020,48 @@ oo::class create ::questlog::ui::Viewer {
             -command [list [self] prompt_show]
         $ActionMenu add command -label "Font…" -command [list [self] choose_font]
         tk_popup $ActionMenu {*}[winfo pointerxy .]
+    }
+
+    # Fit the name into the strip. Cut from the tail, unlike the cwd's interior
+    # elision: a name reads left to right and its opening words are what tell two
+    # sessions apart. Bound to the label's <Configure>, so widening the pane
+    # restores it. The whole name stays one hover away (reveal_name).
+    method elide_name {} {
+        if {![winfo exists $NameLabel]} return
+        if {$NameFull eq ""} {
+            $NameLabel configure -text ""
+            set NameCut 0
+            return
+        }
+        set avail [expr {[winfo width $NameLabel] - 12}]
+        if {$avail <= 1} return
+        if {[font measure QLBold $NameFull] <= $avail} {
+            $NameLabel configure -text $NameFull
+            set NameCut 0
+            return
+        }
+        set cut $NameFull
+        while {$cut ne "" && [font measure QLBold "$cut…"] > $avail} {
+            set cut [string range $cut 0 end-1]
+        }
+        $NameLabel configure -text "$cut…"
+        set NameCut 1
+    }
+
+    # The shown session's name, from open or from a rename that renamed the one
+    # on screen. The strip is the only place the viewer states it, so it is the
+    # only thing to update.
+    method set_name {name} {
+        set NameFull $name
+        my elide_name
+    }
+
+    # The strip cuts the name to the room it has; the whole of it reveals on the
+    # same panel the list's rows use. A name shown whole reveals nothing, as a
+    # list row that fits wires nothing.
+    method reveal_name {} {
+        if {!$NameCut} return
+        ::questlog::ui::reveal::show $NameFull
     }
 
     # Fit the cwd into the strip. Tk labels do not ellipsize, so when the full

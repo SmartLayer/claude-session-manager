@@ -20,7 +20,7 @@ package require streamtree
 set ::questlog_config_only 1; source [file join $ROOT questlog]
 foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
            lib/match.tcl ui/terminal.tcl ui/live.tcl lib/scan.tcl lib/search.tcl \
-           ui/drag.tcl ui/toolbar.tcl ui/sessions.tcl} {
+           ui/drag.tcl ui/toolbar.tcl ui/reveal.tcl ui/sessions.tcl} {
     source [file join $ROOT $f]
 }
 ::questlog::ui::theme::init
@@ -47,7 +47,7 @@ proc subagentsf {path} { return [$::Scan subagents_for $path] }
 # on_folder_bound wired non-empty, as in the real app: the callback's presence
 # must not be what enables the entry.
 set SL [::questlog::ui::SessionList new .s resolvef noop noop noop noop noop \
-            noop scanpath noop subagentsf noop noop noop noop noop]
+            noop scanpath noop subagentsf noop noop noop]
 pack .s -fill both -expand 1
 
 set fails 0

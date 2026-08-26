@@ -21,7 +21,7 @@ package require logman
 set ::questlog_config_only 1; source [file join $ROOT questlog]
 foreach f {lib/debug.tcl lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
            lib/match.tcl ui/terminal.tcl ui/live.tcl lib/scan.tcl lib/search.tcl \
-           ui/drag.tcl ui/toolbar.tcl ui/sessions.tcl ui/viewer.tcl ui/app.tcl} {
+           ui/drag.tcl ui/toolbar.tcl ui/reveal.tcl ui/sessions.tcl ui/viewer.tcl ui/app.tcl} {
     source [file join $ROOT $f]
 }
 ::questlog::match::set_caps [dict create \

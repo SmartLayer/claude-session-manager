@@ -24,7 +24,7 @@ package require streamtree
 set ::questlog_config_only 1; source [file join $ROOT questlog]
 foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
            lib/match.tcl ui/terminal.tcl ui/live.tcl lib/scan.tcl lib/search.tcl \
-           ui/drag.tcl ui/toolbar.tcl ui/sessions.tcl} {
+           ui/drag.tcl ui/toolbar.tcl ui/reveal.tcl ui/sessions.tcl} {
     source [file join $ROOT $f]
 }
 ::questlog::ui::theme::init
@@ -79,7 +79,7 @@ proc subagentsf {path} { return [$::Scan subagents_for $path] }
 proc folderboundf {f} { set ::folder_bound_seen $f }
 
 set SL [::questlog::ui::SessionList new .s resolvef noop noop noop noop noop \
-            noop scanpath noop subagentsf noop noop noop noop folderboundf]
+            noop scanpath noop subagentsf noop noop folderboundf]
 pack .s -fill both -expand 1
 
 set fails 0

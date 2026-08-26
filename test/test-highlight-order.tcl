@@ -2,7 +2,7 @@
 # Tests for ::questlog::ui::rarity_round_robin - the match-index interleave that
 # surfaces every search term once, rarest first, before any term repeats.
 #
-# The proc lives in ui/viewer.tcl, which requires Tk; this test only calls the
+# The proc lives in ui/reveal.tcl ui/viewer.tcl, which requires Tk; this test only calls the
 # pure proc, so it runs under tclsh9.0 given a display. With no display it skips
 # rather than failing, so a display-less run of the suite stays green.
 package require Tcl 9

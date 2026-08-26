@@ -26,7 +26,7 @@ package require streamtree
 # Mirror the launcher's GUI source order for the subset the Viewer needs.
 set ::questlog_config_only 1; source [file join $ROOT questlog]
 foreach f {lib/debug.tcl lib/path.tcl lib/match.tcl \
-           lib/cost.tcl ui/theme.tcl ui/viewer.tcl} {
+           lib/cost.tcl ui/theme.tcl ui/reveal.tcl ui/viewer.tcl} {
     source [file join $ROOT $f]
 }
 ::questlog::ui::theme::init
