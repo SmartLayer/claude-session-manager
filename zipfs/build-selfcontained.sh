@@ -144,15 +144,18 @@ if [ "$ARCH" = "aarch64" ]; then ARCH=arm64; fi
 
 if [ "$OS" = "Darwin" ]; then
     IMAGE="$REPO_ROOT/dist/questlog-$VERSION-macos-$ARCH"
-    # mkimg appended the archive to a linked Mach-O, which voids the ad-hoc
-    # signature the linker applied; Apple Silicon then refuses to exec it.
-    # Re-signing covers the file as it now stands, appended archive included.
-    echo "== 6. ad-hoc signature =="
-    codesign --force --sign - --timestamp=none "$IMAGE"
-    # The image must still be able to find its own archive: a signature is
-    # written at the end of the file, and zipfs locates the archive by scanning
-    # back from there for the zip directory. --version answers without a
-    # display, so it exercises exec, mount and startup on a headless runner.
+    # An image cannot be re-signed. mkimg appends its archive past the end of
+    # the Mach-O's __LINKEDIT, and codesign refuses that shape outright: "main
+    # executable failed strict validation". So what the image carries is the
+    # ad-hoc signature the linker gave the wish, covering the bytes that
+    # existed then, with the archive sitting beyond the signed region.
+    #
+    # Whether Apple Silicon accepts that is the question this answers. It
+    # enforces a valid signature on every arm64 binary, and the test of what
+    # "valid" admits is to run one: --version answers without a display, so
+    # exec, mount and startup are all exercised on a headless runner. A kernel
+    # that refuses the shape kills the process here, and the build stops.
+    echo "== 6. run the image =="
     "$IMAGE" --version
 
     echo "== 7. app bundle and dmg =="

@@ -9,18 +9,21 @@
 # file becomes Contents/MacOS/questlog, and Info.plist plus an .icns is all that
 # sits beside it.
 #
-# Signing is ad-hoc (`codesign -s -`), which is what an Apple Developer ID
-# would otherwise buy at the identity end. Two distinct things follow from
-# that, and only one is optional:
+# The bundle ships whatever signature the executable already has, and adds
+# none. codesign will not sign a zipfs image: mkimg appends its archive past
+# the end of the Mach-O's __LINKEDIT, and codesign rejects that shape as "main
+# executable failed strict validation". What the executable carries is the
+# ad-hoc signature the linker gave the wish it was stubbed onto.
 #
-#   - Apple Silicon refuses to exec an arm64 binary carrying no valid
-#     signature at all, and `zipfs mkimg` appends its archive to the linked
-#     executable, invalidating the ad-hoc signature the linker applied. So the
-#     re-sign is load-bearing on arm64, not cosmetic.
-#   - Gatekeeper still quarantines a download that no Developer ID signed and
-#     Apple did not notarize. The user clears that per install (right-click ->
-#     Open, or `xattr -dr com.apple.quarantine`); nothing buildable here
-#     removes it. docs/installation.md carries the instruction.
+# Signing is attempted anyway, and a refusal is reported and passed over
+# rather than failing the build: whether the bundle can be signed is a
+# property of the image shape, while whether it runs is what the build then
+# goes on to test.
+#
+# Gatekeeper is a separate matter and no build step reaches it. A download
+# that no Developer ID signed and Apple did not notarize is quarantined, and
+# the user clears that per install (Control-click -> Open, or `xattr -dr
+# com.apple.quarantine`). docs/installation.md carries the instruction.
 #
 # Usage:
 #   zipfs/macos-bundle.sh <image> <version> <arch>
@@ -88,9 +91,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "== ad-hoc signature =="
-codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP"
-codesign --verify --verbose "$APP"
+echo "== signature =="
+if codesign --force --sign - --identifier "$BUNDLE_ID" --timestamp=none "$APP" 2>&1; then
+    codesign --verify --verbose "$APP"
+else
+    echo "bundle ships with the executable's own signature; see the header"
+fi
 
 echo "== dmg =="
 # The window a user opens: the app on one side, a link to /Applications on the
