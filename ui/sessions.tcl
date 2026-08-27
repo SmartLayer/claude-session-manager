@@ -215,7 +215,8 @@ oo::class create ::questlog::ui::SessionList {
                 muted [::questlog::ui::theme::c muted] \
                 ink   [::questlog::ui::theme::c ink]] \
             -resortdelay [::questlog::config::get resort_debounce_ms] \
-            -motioncb {::questlog::ui::drag::motion %X %Y}
+            -motioncb {::questlog::ui::drag::motion %X %Y} \
+            -cursorcb [list [self] on_cursor]
         # The three list-view filters declared to the base class, which renders the
         # running/bookmarked glyphs (subject-prefix, per-attribute tag attr-<id>)
         # and builds the strip filter controls. attr_value below answers running
@@ -2796,6 +2797,17 @@ oo::class create ::questlog::ui::SessionList {
 
     # A modified press only outranks the plain <ButtonPress-1> so no drag arms.
     method on_modified_press {args} {}
+
+    # Where the arrow keys leave the base class's cursor, the selection follows,
+    # so the keyboard and a plain click highlight a row the same way. Neither
+    # opens anything: Return does that, on whatever the cursor reached. A
+    # subagent row carries no selection and is passed over.
+    method on_cursor {id prev} {
+        switch -- [my node_field $id kind] {
+            folder  { my folder_select [my node_field $id key] }
+            session { my selection_set [my node_field $id key] }
+        }
+    }
 
     # A snippet click opens the session too, deep-linked to that match's line.
     method on_snippet_release {path lineno} {

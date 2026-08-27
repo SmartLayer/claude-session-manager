@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require leash
-package provide streamtree 0.3.2
+package provide streamtree 0.4.0
 
 namespace eval ::streamtree {}
 
@@ -39,9 +39,10 @@ namespace eval ::streamtree {}
 #
 # The base class owns every text-mark mutation behind a treeview-style primitive
 # ensemble - insert/delete/detach/item/expand/collapse/hide/unhide/move/rebuild,
-# plus reset and a content door (append_open/emit/emit_window/append_close, and
-# drop_loose to lift a tagged run of it back out) for loose in-row content that
-# is not itself a node. A subclass drives the widget only through these and
+# the cursor the keyboard walks (treeview's focus row), plus reset and a content
+# door (append_open/emit/emit_window/append_close, and drop_loose to lift a
+# tagged run of it back out) for loose in-row content that is not itself a
+# node. A subclass drives the widget only through these and
 # never touches the text widget.
 #
 # Hooks the subclass overrides (Template Method). Every hook has a working
@@ -178,6 +179,7 @@ oo::class create ::streamtree::StreamTree {
     variable Nodes
     variable Roots
     variable NextId
+    variable Cursor           ;# the node id the keyboard walks from, or "" when none
     # Column geometry, measured once (the proportional list font is fixed) and
     # re-pinned on resize.
     variable ColTabs          ;# -tabs spec for a row (right-pinned metadata)
@@ -224,6 +226,7 @@ oo::class create ::streamtree::StreamTree {
         set Nodes [dict create]
         set Roots [list]
         set AttrHidden [dict create]
+        set Cursor ""
     }
 
     method node_new {kind parent key payload} {
@@ -306,6 +309,7 @@ oo::class create ::streamtree::StreamTree {
     # same door: -attrs declares the typed attributes, -attrstyles names the styles
     # its filter controls take (empty roles fall back to the stock ttk widget), and
     # -attrfiltercb is fired with the filter state whenever a filter changes.
+    # -cursorcb hears every keyboard move of the cursor.
     method default_opts {} {
         return [dict create \
             listfont TkTextFont \
@@ -314,6 +318,7 @@ oo::class create ::streamtree::StreamTree {
             resortdelay 250 \
             autofollow 0 \
             motioncb "" \
+            cursorcb "" \
             attrs [list] \
             attrstyles [dict create check "" menu "" popcheck "" popbtn "" popframe ""] \
             attrfiltercb ""]
@@ -420,6 +425,18 @@ oo::class create ::streamtree::StreamTree {
             bind StreamtreeWheel $ev [bind Text $ev]
         }
         bindtags $Text [list $Text StreamtreeWheel [winfo toplevel $Text] all]
+        # The keys a list does want, on the widget itself: they walk the drawn
+        # rows rather than an insert mark, so what disqualified the class does
+        # not touch them. The list takes the focus so they act only in it.
+        foreach {key where} {Up prev Down next Home first End last} {
+            bind $Text <Key-$key> [list [self] cursor_move $where]
+        }
+        bind $Text <Key-Right> [list [self] cursor_open 1]
+        bind $Text <Key-Left>  [list [self] cursor_open 0]
+        # A click in the list is how a reader says the keys should act here; the
+        # class binding that used to do this went with the class.
+        bind $Text <ButtonPress-1> +[list focus $Text]
+        $Text configure -takefocus 1
         bind $Text <B1-Motion> [my opt motioncb]
         # A list has no insert cursor: hide it, and blank the text-selection
         # colours so a `sel` range a host leaves behind never paints rows grey.
@@ -905,6 +922,50 @@ oo::class create ::streamtree::StreamTree {
         return $out
     }
 
+    # ---- the cursor ---------------------------------------------------
+    #
+    # The row the keyboard walks from, treeview's `focus` under a name Tk has not
+    # already taken. It is a node id and nothing more: the class paints no mark
+    # for it and reads no meaning into it, leaving a host to move its selection
+    # with the cursor or to ignore it.
+
+    method cursor {} { return $Cursor }
+
+    # Drawn is the same roster the walk steps over, so a node in the store with
+    # no row on screen (a shut folder's child) is refused the cursor rather than
+    # sought out and scrolled to.
+    method cursor_set {id} {
+        if {$id eq $Cursor} return
+        if {$id ne "" && $id ni [my all_rendered_nodes]} return
+        set prev $Cursor
+        set Cursor $id
+        if {$id ne ""} { $Text see [my node_field $id start] }
+        if {[my opt cursorcb] ne ""} { {*}[my opt cursorcb] $id $prev }
+    }
+
+    # Step the cursor over the drawn rows, which excludes a shut folder's
+    # children; a cursor whose node has gone starts again at the top.
+    method cursor_move {where} {
+        set rows [my all_rendered_nodes]
+        if {![llength $rows]} return
+        set i [lsearch -exact $rows $Cursor]
+        switch -- $where {
+            next  { set i [expr {$i < 0 ? 0 : min($i + 1, [llength $rows] - 1)}] }
+            prev  { set i [expr {$i < 0 ? 0 : max($i - 1, 0)}] }
+            first { set i 0 }
+            last  { set i [expr {[llength $rows] - 1}] }
+        }
+        my cursor_set [lindex $rows $i]
+    }
+
+    # Right expands the cursor's node and Left collapses it, the keyboard's way
+    # into a folder the walk would otherwise pass over. A childless node ignores
+    # both.
+    method cursor_open {open} {
+        if {$Cursor eq "" || ![llength [my node_field $Cursor children]]} return
+        if {$open} { my expand $Cursor } else { my collapse $Cursor }
+    }
+
     # ---- generic row drawing ------------------------------------------
     #
     # A row is the subject (the node's left side, built by render_subject) plus a
@@ -1214,6 +1275,7 @@ oo::class create ::streamtree::StreamTree {
         my on_before_delete $id
         my drop_render_marks $id
         if {[info exists AttrHidden]} { dict unset AttrHidden $id }
+        if {$id eq $Cursor} { set Cursor "" }
         dict unset Nodes $id
     }
     # Remove a node from its parent's child list (or from Roots for a root).

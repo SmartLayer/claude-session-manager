@@ -37,6 +37,9 @@ streamtree renders a tree of abstract nodes into a single `text` widget: nodes n
 | `column id -width N -minwidth M` | `column id -width N -minwidth M` | per-column width override and clamp |
 | `rebuild` | (none) | re-render the whole tree from the durable store under the active sort |
 | `reset` | `delete [children {}]` | empty the whole widget |
+| `cursor` / `cursor_set id` | `focus` / `focus id` | the row the keyboard walks from; `cursor_set` scrolls it into view and fires `-cursorcb` |
+| `cursor_move next\|prev\|first\|last` | (the class bindings) | step the cursor over the drawn rows |
+| `cursor_open 1\|0` | `item id -open true/false` | expand or collapse the cursor's own node |
 
 Every primitive owns its text-mark mutation and ends in `check_invariant`; a host never touches the underlying text widget.
 
@@ -89,6 +92,7 @@ The base class takes its host-specific look and services as options, set through
 | `-resortdelay` | `250` | ms a streamed resort debounces before one rebuild |
 | `-autofollow` | `0` | keep the view latched to the tail while the reader is there |
 | `-motioncb` | empty | a `<B1-Motion>` script the drag-to-move host wires in |
+| `-cursorcb` | empty | fired `{new prev}` whenever the cursor moves, the only notice a host gets of one |
 
 ## THE AUDIT GATE
 
@@ -113,9 +117,11 @@ The base class renders every visible row into the text widget (no virtualization
 
 ## LIMITS
 
-To a screen reader the widget presents as one text area, not a tree of rows and columns; assistive-technology structure (row navigation, expansion state) is not exposed. Cell editing, checkbox columns, and type-ahead are not built in; a host can assemble them from embedded windows, row tags, and key bindings.
+To a screen reader the widget presents as one text area, not a tree of rows and columns; assistive-technology structure (row navigation, expansion state) is not exposed. Cell editing, checkbox columns, page-at-a-time keys, and type-ahead are not built in; a host can assemble them from embedded windows, row tags, and key bindings.
 
 The list text does not carry the Text class bindtag, because an object list wants none of what that class does: its click gestures start a text selection and its motion keys scroll to an insert mark a list never maintains. The class's wheel scripts are kept. A host's own bindings go on the row tags, the widget, or the toplevel, all of which still run.
+
+The arrows, Home and End are the module's own, walking the drawn rows through the cursor rather than an insert mark, and Right and Left open and shut the cursor's node so a keyboard can reach inside a folder. They act only while the list holds the focus, which the list takes for them. The cursor is a node id and no more: nothing is painted for it, so a host that wants a selection to follow the keyboard moves its own through `-cursorcb`.
 
 ## DECLARATIVE ATTRIBUTES
 
