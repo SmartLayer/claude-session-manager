@@ -108,10 +108,9 @@ proc ::questlog::ui::reveal::build {} {
         -font QLList -padx 6 -pady 0 -wraplength $wrap
     $Win configure -background [::questlog::ui::theme::c ctrl_border_hi]
     # The toplevel's own background showing through a one-pixel inset is the
-    # panel's border: a label -borderwidth draws a relief, not a hairline.
-    pack $Head -fill x -padx 1 -pady {3 0}
-    pack $Lbl -fill both -expand 1 -padx 1 -pady {0 1}
-    pack $Sub -fill x -padx 1 -pady {0 3}
+    # panel's border: a label -borderwidth draws a relief, not a hairline. The
+    # lines themselves are packed by place, which knows which of them this
+    # reveal has.
 }
 
 # Place the panel below-right of the pointer, pulled back inside the screen
@@ -126,14 +125,18 @@ proc ::questlog::ui::reveal::place {text {head ""} {sub ""}} {
     variable Timer
     set Timer ""
     build
-    # The heading is a line of its own, in the list's own title weight: what the
-    # row is called reads apart from what it says. A reveal with no heading
-    # drops the line rather than leaving a blank one.
+    # Each line is packed only when this reveal has one, so a folder heading (all
+    # name, nothing under it) is a one-line panel and a session row is three.
+    # Re-packed from empty in order rather than -before/-after one another: a
+    # line dropped by the last reveal is no longer a landmark this one can place
+    # against.
     $Head configure -text $head
-    if {$head eq ""} { pack forget $Head } else { pack $Head -fill x -padx 1 -pady {1 0} -before $Lbl }
     $Lbl configure -text $text
     $Sub configure -text $sub
-    if {$sub eq ""} { pack forget $Sub } else { pack $Sub -fill x -padx 1 -pady {0 3} -after $Lbl }
+    foreach w [list $Head $Lbl $Sub] { pack forget $w }
+    if {$head ne ""} { pack $Head -fill x -padx 1 -pady {3 0} }
+    if {$text ne ""} { pack $Lbl -fill both -expand 1 -padx 1 -pady {0 1} }
+    if {$sub ne ""}  { pack $Sub -fill x -padx 1 -pady {0 3} }
     update idletasks
     set w [winfo reqwidth $Win]
     set h [winfo reqheight $Win]

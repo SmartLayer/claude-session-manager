@@ -161,6 +161,27 @@ set res [subject_at [dict create slug "quick fix" count 0 sub_total 0 \
              has_subagents 0 label "short one"] 600]
 check "an untrimmed row wires no reveal" [reveal_entry $res] ""
 
+# ---- case 5: a folder heading cut to its aggregates reveals its path -------
+# A project path is what names a folder, and a deep one is cut before the
+# right-pinned aggregates. The heading carries the same reveal as a session row,
+# with the path as the whole of it: there is nothing under a folder's name to
+# show. A path that fits wires nothing.
+proc folder_at {folder cwd max} {
+    set ns [info object namespace $::SL]
+    set ${ns}::FolderLabelMax $max
+    $::SL ensure_folder $folder $cwd
+    return [$::SL folder_subject [$::SL fid $folder]]
+}
+set DEEP /home/somebody/code/a-long-organisation-name/a-long-repository-name/nested/deeper
+set res [folder_at "-deep" $DEEP 200]
+lassign [reveal_entry $res] rkind rtext
+check "a cut folder heading reveals the whole path" $rkind \
+    [::questlog::path::pretty_home $DEEP]
+check "a folder reveal has nothing under the path" $rtext ""
+
+set res [folder_at "-short" /tmp/p 200]
+check "an untrimmed folder heading wires no reveal" [reveal_entry $res] ""
+
 ::questlog::path::_real_file delete -force $SAND
 if {$fails > 0} {
     puts "$fails failures"

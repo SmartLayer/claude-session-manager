@@ -2170,10 +2170,24 @@ oo::class create ::questlog::ui::SessionList {
         # never runs into the right-pinned aggregates.
         set fixed [expr {[font measure QLList "$marker "] \
                          + [font measure QLList $count_str]}]
-        set label [my truncate_px [dict get $f label] \
+        set full [dict get $f label]
+        set label [my truncate_px $full \
                        [expr {$FolderLabelMax - $fixed}] QLList]
+        set tags [list [list foldchevron 0 1]]
+        # A project path is long and cut from the front of the aggregates, so a
+        # deep folder shows its head and hides the leaf that names it. The cut
+        # label carries the reveal, over the label run alone: the chevron and the
+        # counts beside it say all they have to say. The heading has no <Enter>
+        # of its own, so the reveal leaves the cursor alone rather than promising
+        # a hand the row never showed before.
+        if {$label ne $full} {
+            set ntag "t#$node"
+            lappend tags [list $ntag [string length "$marker "] \
+                              [string length $label]]
+            my peek_wire $ntag $full "" 0
+        }
         return [dict create subject "$marker $label$count_str" \
-                    tags [list [list foldchevron 0 1]] meta_run 0]
+                    tags $tags meta_run 0]
     }
 
     method redraw_folder_heading {folder} {
