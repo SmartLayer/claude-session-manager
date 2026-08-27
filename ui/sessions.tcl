@@ -1178,18 +1178,19 @@ oo::class create ::questlog::ui::SessionList {
             [list [self] on_session_press $bpath %X %Y]
         $Text tag bind $stag <ButtonRelease-1> \
             [list [self] on_session_release $bpath %X %Y]
-        # Shift/Control extend the selection. The modifier press is a no-op that
-        # only outranks the plain <ButtonPress-1> above, so a modified click arms
-        # no drag; the gesture resolves on the modified release.
-        $Text tag bind $stag <Shift-ButtonPress-1>   [list [self] on_modified_press]
-        $Text tag bind $stag <Control-ButtonPress-1> [list [self] on_modified_press]
+        # Shift extends the selection; the platform's add-to-selection click,
+        # which Tk names <<ToggleSelection>>, adds or drops one row. It is bound
+        # as the virtual event and resolved on the matching release, never
+        # written out: it is Command-Button-1 on Aqua but Control-Button-1 here,
+        # and a literal Control sequence would outrank <<ContextMenu>>, which
+        # Aqua's Control-click also raises (bind(n) MULTIPLE MATCHES, rule (d)).
+        $Text tag bind $stag <Shift-ButtonPress-1> [list [self] on_modified_press]
+        $Text tag bind $stag <<ToggleSelection>>   [list [self] on_modified_press]
         $Text tag bind $stag <Shift-ButtonRelease-1> \
             [list [self] on_session_shift_release $bpath %X %Y]
-        $Text tag bind $stag <Control-ButtonRelease-1> \
-            [list [self] on_session_ctrl_release $bpath %X %Y]
-        # Tk's <<ContextMenu>> virtual event already maps to the right button
-        # per platform (Button-2 on Aqua, Button-3 elsewhere); app.tcl extends
-        # it with Control-Button-1 on Aqua so Ctrl+click works too.
+        $Text tag bind $stag [string map {Button- ButtonRelease-} \
+                [lindex [event info <<ToggleSelection>>] 0]] \
+            [list [self] on_session_toggle_release $bpath %X %Y]
         $Text tag bind $stag <<ContextMenu>> \
             [list [self] on_session_right $bpath %X %Y]
         # A whole session row is one clickable object: a hand cursor over it,
@@ -2779,8 +2780,8 @@ oo::class create ::questlog::ui::SessionList {
         my open_session $path 0
     }
 
-    # Control release: toggle this row in the selection, across folders. No open.
-    method on_session_ctrl_release {path X Y} {
+    # Toggle release: add or drop this row in the selection, across folders.
+    method on_session_toggle_release {path X Y} {
         if {[my click_on_action $X $Y] || [my click_on_chevron $X $Y]} return
         if {[::questlog::ui::drag::release $X $Y]} return
         my selection_toggle $path
