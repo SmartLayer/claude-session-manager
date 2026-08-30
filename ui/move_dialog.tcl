@@ -82,21 +82,21 @@ proc ::questlog::ui::move_dialog::open {parent count current_folder on_done live
     pack $Top.f.erow.browse -side right -padx {6 0}
     pack $Top.f.erow.entry -side left -fill x -expand 1
 
+    # Why Move is disabled, sitting directly above the button row so the
+    # greyed button and its reason are read together. Empty (and zero-height)
+    # while nothing blocks the move.
+    ttk::label $Top.f.tip -anchor w -justify left \
+        -foreground [::questlog::ui::theme::c muted] \
+        -wraplength 380 -text ""
+    pack $Top.f.tip -side top -fill x -pady {10 0}
     ttk::frame $Top.f.btn
-    pack $Top.f.btn -side top -fill x -pady {10 0}
+    pack $Top.f.btn -side top -fill x -pady {6 0}
     ttk::button $Top.f.btn.cancel -text "Cancel" \
         -command ::questlog::ui::move_dialog::cancel
     ttk::button $Top.f.btn.ok -text "Move" \
         -command ::questlog::ui::move_dialog::confirm
     pack $Top.f.btn.ok     -side right
     pack $Top.f.btn.cancel -side right -padx {0 6}
-
-    # Tip shown only while a selected session is live: it names the offenders
-    # and why Move is blocked. Empty (and zero-height) otherwise.
-    ttk::label $Top.f.tip -anchor w -justify left \
-        -foreground [::questlog::ui::theme::c muted] \
-        -wraplength 380 -text ""
-    pack $Top.f.tip -side top -fill x -pady {6 0}
 
     bind $Tv <Double-Button-1>      ::questlog::ui::move_dialog::confirm
     bind $Tv <<TreeviewSelect>>     ::questlog::ui::move_dialog::on_select
