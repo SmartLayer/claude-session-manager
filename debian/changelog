@@ -1,3 +1,13 @@
+questlog (1.2.2) unstable; urgency=medium
+
+  * Rates: Claude Fable 5.1 and Claude Mythos 5.1 are priced (released 2026-09-01; cache reads at a quarter of Fable 5's rate); a session on either had shown a blank cost, or a false low where other models shared it. Sonnet 5 keeps its $2/$10 launch price: the rise to $3/$15 scheduled for 2026-09-01 did not happen, and the row for it is gone.
+  * Sessions list: the arrow keys, Home and End walk the rows and Right and Left open and shut a folder, with Return opening the row the walk reached; the list takes the focus on a click, so the arrows act where the reader last pointed.
+  * Sessions list: hovering a folder heading cut short by its counts reveals the whole project path; on macOS, Control-click opens a row's context menu and Command-click adds the row to the selection.
+  * Move dialog: the reason a live session cannot be moved sits directly above the greyed Move button.
+  * Packaging: the Windows single-file image builds (the static link names winspool, and the build finds its interpreter in the build tree as well as the install); the macOS install page leads with the "damaged" verdict a first launch actually gets and the one command that clears it.
+
+ -- Weiwu Zhang <a@colourful.land>  Wed, 02 Sep 2026 00:00:00 +0000
+
 questlog (1.2.1) unstable; urgency=medium
 
   * Packaging: macOS ships questlog.app inside a disk image, and Windows ships a single .exe; both carry their own Tcl 9, so neither host needs one installed. Each is unsigned by an authority the OS trusts, so the first launch asks once (Control-click -> Open on macOS, More info -> Run anyway on Windows).

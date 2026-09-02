@@ -1,5 +1,5 @@
 Name:           questlog
-Version:        1.2.1
+Version:        1.2.2
 Release:        1%{?dist}
 Summary:        GUI for finding, reading, and reopening past Claude Code sessions
 License:        MIT
@@ -60,6 +60,12 @@ install -D -m 0644 assets/questlog-512.png \
 %{_datadir}/icons/hicolor/512x512/apps/questlog.png
 
 %changelog
+* Wed Sep 02 2026 Weiwu Zhang <a@colourful.land> - 1.2.2-1
+- Rates: Claude Fable 5.1 and Mythos 5.1 are priced, with cache reads at a quarter of Fable 5's rate; Sonnet 5 keeps its $2/$10 launch price, the scheduled rise having been cancelled
+- Sessions list: the arrow keys, Home and End walk the rows, Right and Left open and shut a folder, Return opens the row reached; a cut folder heading reveals its whole path on hover; on macOS Control-click opens the context menu and Command-click extends the selection
+- Move dialog: the reason a live session cannot be moved sits above the Move button
+- Packaging: the Windows single-file image builds (winspool named, interpreter found in the build tree); the macOS install page leads with the verdict a first launch gets and the command that clears it
+
 * Wed Aug 26 2026 Weiwu Zhang <a@colourful.land> - 1.2.1-1
 - Packaging: macOS ships questlog.app inside a disk image and Windows a single .exe, each carrying its own Tcl 9; both are unsigned, so the first launch asks once
 - Windows: session resume opens a Windows Terminal tab or a cmd window, folder reveal opens Explorer, and the Running filter stays empty there
