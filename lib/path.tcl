@@ -3,7 +3,8 @@ package require Tcl 9
 namespace eval ::questlog::path {
     namespace export encode_cwd projects_root pretty_home display_label \
         list_all_projects ensure_project_folder candidate_cwds_for \
-        move_session set_bookmark clear_bookmark launch_cwd canon_dir
+        move_session set_bookmark clear_bookmark launch_cwd canon_dir \
+        container_tree
 }
 
 # Architectural gate. Rename Tcl's `file` command and replace it with a
@@ -243,4 +244,52 @@ proc ::questlog::path::_walk {dir parts} {
         }
     }
     return $out
+}
+
+# Group resolved folder directories into the tree the session list draws.
+# `entries` is a list of {key dir} pairs, one per folder under the projects
+# root, dir its absolute directory. Returns the root nodes; each node is a
+# dict {label dir keys children}, where keys names the folders whose sessions
+# live at that directory and children holds nodes of the same shape.
+#
+# The container rule decides which directories become rows: one that holds no
+# folder of its own is not a row, and its label is pushed down into each of
+# its children. A lone child reads as a merge, "infrastructure/energy"; several
+# read as promotion, each carrying the prefix. A root's label is absolute
+# because everything above it was pushed down; a nested label is one segment.
+proc ::questlog::path::container_tree {entries} {
+    set trie [dict create keys {} kids {}]
+    foreach pair $entries {
+        lassign $pair key dir
+        set at {}
+        foreach seg [lrange [file split $dir] 1 end] {
+            lappend at kids $seg
+            if {![dict exists $trie {*}$at]} {
+                dict set trie {*}$at [dict create keys {} kids {}]
+            }
+        }
+        set held [dict get $trie {*}$at keys]
+        lappend held $key
+        dict set trie {*}$at keys $held
+    }
+    return [_emit_nodes $trie "/" "/"]
+}
+
+# One trie node's contribution to its parent's child list: itself when it holds
+# folders, otherwise its children with its label pushed into theirs.
+proc ::questlog::path::_emit_nodes {trie label dir} {
+    set out [list]
+    foreach seg [lsort -dictionary [dict keys [dict get $trie kids]]] {
+        foreach node [_emit_nodes [dict get $trie kids $seg] $seg \
+                          [file join $dir $seg]] {
+            lappend out $node
+        }
+    }
+    set keys [dict get $trie keys]
+    if {[llength $keys] == 0} {
+        return [lmap node $out {
+            dict set node label [file join $label [dict get $node label]]
+        }]
+    }
+    return [list [dict create label $label dir $dir keys $keys children $out]]
 }
