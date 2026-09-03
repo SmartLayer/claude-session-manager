@@ -31,7 +31,7 @@ streamtree renders a tree of abstract nodes into a single `text` widget: nodes n
 | `delete id` | `delete id` | removes the node and its subtree from view and store |
 | `detach id` | `detach id` | removes the row from view, keeps the node (and its open state) in the store |
 | `item id` | `item id -values ...` | rewrites the node's own row in place |
-| `expand id` / `collapse id` | `item id -open true/false` | draws / removes the body |
+| `expand id` / `collapse id` | `item id -open true/false` | draws / removes the body; `expand` also draws the node's own row when it has none and is due |
 | `hide id` / `unhide id` | `detach` + `move` | a reversible per-node filter (treeview has no first-class hide) |
 | `move id newparent` | `move id newparent end` | reparents, then rebuilds |
 | `column id -width N -minwidth M` | `column id -width N -minwidth M` | per-column width override and clamp |
@@ -40,6 +40,8 @@ streamtree renders a tree of abstract nodes into a single `text` widget: nodes n
 | `cursor` / `cursor_set id` | `focus` / `focus id` | the row the keyboard walks from; `cursor_set` scrolls it into view and fires `-cursorcb` |
 | `cursor_move next\|prev\|first\|last` | (the class bindings) | step the cursor over the drawn rows |
 | `cursor_open 1\|0` | `item id -open true/false` | expand or collapse the cursor's own node |
+| `reveal id` | `see id` | opens every shut ancestor and scrolls the node's row into view |
+| `expand_subtree id` | `item -open true` down the subtree | opens a node and everything under it, the view anchored once |
 
 Every primitive owns its text-mark mutation and ends in `check_invariant`; a host never touches the underlying text widget.
 
@@ -48,6 +50,8 @@ Every primitive owns its text-mark mutation and ends in `check_invariant`; a hos
 ```tcl
 $t batch { lmap id [$t roots] { $t expand $id } }
 ```
+
+`expand_subtree id` opens every level under one node the same way, and `reveal id` opens the ancestors of one node and scrolls its row into view, the treeview `see`; a node that `hide` or `render_skip` keeps out has no row to reveal and the view stays put. `cursor_set` refuses a node with no row, so `reveal` is the step before it for a node shut away in a folder.
 
 ## THE CONTENT DOOR
 
@@ -74,11 +78,11 @@ Content / layout: `subject_label` (header over the subject column), `column_spec
 
 Row lifecycle (per node kind): `start_gravity`, `row_tags`, `on_node_created` (register domain indices before the row renders), `on_row_rendered` (wire bindings, nested content, selection), `on_before_delete` (drop domain indices), `populate` (called at the top of `expand`; a lazy host enumerates and attaches the node's children here, a materialized tree keeps the no-op default).
 
-Rebuild: `sort_siblings` (reorder a sibling set for display, keeping every node), `render_skip` (leave a node out of the view while keeping it in the store), `rebuild_restore` (re-pin the viewport to a captured top node).
+Ordering and view membership: `kind_rank` (the integer rank a kind's run takes among siblings of mixed kinds, lowest first; the base class keeps each kind's nodes together, orders the runs by rank with ties in first-seen order, and hands each run to `sort_siblings` on its own, so that hook only ever sees one kind), `sort_siblings` (reorder a sibling set of one kind for display, keeping every node), `render_skip` (leave a node and its subtree out of the view while keeping it in the store; asked wherever a node is drawn with its content in place, so a skipped node stays out through `expand`, `unhide` and `rebuild` alike. `insert` does not ask it: what decides a skip, a node's children or aggregates, has not arrived when the node is born, so a new node draws on its place alone, and `expand` draws a node the skip kept out once it is due, no rebuild needed), `rebuild_restore` (re-pin the viewport to a captured top node).
 
 ## THE SUBCLASS SURFACE
 
-A hook body works with its nodes through the store accessors, part of the subclassing contract: `node_exists id`, `node_get id` (the whole node dict), `node_field id field` / `node_set id field value` (one generic field), `node_payload id` (the opaque host dict) and `node_pget id key ?default?` / `node_pset id key value` (one payload key), and `roots` (the ordered root ids). Beside them sit the helpers a subclass reaches for while rendering and sorting: `colour role` (a `-colours` entry), `truncate_px text px font` (ellipsize to a pixel width), `all_rendered_nodes` (ids with a row in the view, document order), `set_sort id` (adopt a column as the active sort) and `schedule_resort` (debounced re-sort after streamed edits, `-resortdelay`). The demos use exactly this surface and nothing deeper; a subclass that finds itself wanting more than these and the hooks is reading the base class's own internals.
+A hook body works with its nodes through the store accessors, part of the subclassing contract: `node_exists id`, `node_get id` (the whole node dict), `node_field id field` / `node_set id field value` (one generic field), `node_payload id` (the opaque host dict) and `node_pget id key ?default?` / `node_pset id key value` (one payload key), `roots` (the ordered root ids), `ancestors id` (nearest first, up to the root) and `descendants id` (parents before children, siblings in store order, to any depth). Beside them sit the helpers a subclass reaches for while rendering and sorting: `colour role` (a `-colours` entry), `truncate_px text px font` (ellipsize to a pixel width), `all_rendered_nodes` (ids with a row in the view, document order), `set_sort id` (adopt a column as the active sort) and `schedule_resort` (debounced re-sort after streamed edits, `-resortdelay`). The demos use exactly this surface and nothing deeper; a subclass that finds itself wanting more than these and the hooks is reading the base class's own internals.
 
 ## OPTIONS
 
@@ -96,7 +100,7 @@ The base class takes its host-specific look and services as options, set through
 
 ## THE AUDIT GATE
 
-Set the `STREAMTREE_AUDIT` environment variable and every primitive checks the per-node mark contract after it runs: each node's `[start,end]` region is well-formed and the roots are ordered and disjoint down the buffer. The first violation latches `::STREAMTREE_AUDIT_TRIPPED` and writes an `INVARIANT @ <primitive>` line to stderr naming the operation that broke the contract. Production leaves the variable unset and pays nothing.
+Set the `STREAMTREE_AUDIT` environment variable and every primitive checks the per-node mark contract after it runs: each drawn node's `[start,end]` region is well-formed, lies inside its parent's, and is ordered and disjoint from its siblings down the buffer, to any depth; a node with no row has no drawn descendant. The first violation latches `::STREAMTREE_AUDIT_TRIPPED` and writes an `INVARIANT @ <primitive>` line to stderr naming the operation that broke the contract. Production leaves the variable unset and pays nothing.
 
 ## PERFORMANCE
 

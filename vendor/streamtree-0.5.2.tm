@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require leash
-package provide streamtree 0.4.0
+package provide streamtree 0.5.2
 
 namespace eval ::streamtree {}
 
@@ -13,8 +13,9 @@ namespace eval ::streamtree {}
 #
 # A StreamTree owns a tree of abstract NODES rendered into a single read-only
 # text widget, with a right-pinned, sortable metadata strip whose columns line
-# up across every row. Each node is a folder/row/child carrying the position
-# marks and tag that locate it in the widget, plus an opaque domain payload.
+# up across every row. Each node, whatever its kind and however deep it sits,
+# carries the position marks and tag that locate it in the widget, plus an
+# opaque domain payload.
 # The subclass supplies the content and ordering through the hooks
 # (Template Method); the base class never looks inside a payload.
 #
@@ -39,11 +40,12 @@ namespace eval ::streamtree {}
 #
 # The base class owns every text-mark mutation behind a treeview-style primitive
 # ensemble - insert/delete/detach/item/expand/collapse/hide/unhide/move/rebuild,
-# the cursor the keyboard walks (treeview's focus row), plus reset and a content
-# door (append_open/emit/emit_window/append_close, and drop_loose to lift a
-# tagged run of it back out) for loose in-row content that is not itself a
-# node. A subclass drives the widget only through these and
-# never touches the text widget.
+# reveal and expand_subtree over a node's ancestors and descendants, the cursor
+# the keyboard walks (treeview's focus row), plus reset and a content door
+# (append_open/emit/emit_window/append_close, and drop_loose to lift a tagged
+# run of it back out) for loose in-row content that is not itself a node. A
+# subclass drives the widget only through these and never touches the text
+# widget.
 #
 # Hooks the subclass overrides (Template Method). Every hook has a working
 # default, so a minimal subclass overrides nothing and gets a plain tree whose
@@ -70,9 +72,11 @@ namespace eval ::streamtree {}
 #     on_before_delete id        drop the node's domain indices before it leaves the store
 #     populate id                realize a lazy node's children at the top of expand,
 #                                before the base class draws them
-#   Rebuild
-#     sort_siblings ids          reorder a sibling set for display, keeping every node
-#     render_skip id             leave a node out of the view while keeping it in the store
+#   Ordering and view membership
+#     kind_rank kind             the rank a kind's run takes among siblings of mixed kinds
+#     sort_siblings ids          reorder a sibling set of one kind for display, keeping every node
+#     render_skip id             leave a node out of the view while keeping it in the store,
+#                                asked wherever a node is drawn with its content in place
 #     rebuild_restore anchor     re-pin the view to a {kind key} top node after a rebuild
 #   Attributes
 #     attr_value node id         the value of a declared attribute on a node, read
@@ -251,44 +255,37 @@ oo::class create ::streamtree::StreamTree {
             [dict get [dict get $Nodes $id] payload] $key $value]
     }
     method roots {} { return $Roots }
+    # A node's ancestors, nearest first, up to its root.
+    method ancestors {id} {
+        set out [list]
+        for {set p [my node_field $id parent]} {$p ne ""} {set p [my node_field $p parent]} {
+            lappend out $p
+        }
+        return $out
+    }
+    # Every node under a node, parents before children, siblings in store
+    # order: the order their rows take in the view, to any depth.
+    method descendants {id} {
+        set out [list]
+        foreach c [my node_field $id children] { lappend out $c {*}[my descendants $c] }
+        return $out
+    }
 
     # ---- structural invariant ----------------------------------------
     #
-    # The mark contract every structural mutation must preserve: each root's
-    # [start,end] region is well-formed (end >= start) and the roots are ordered
-    # and disjoint down the buffer. A violation means a mark desynced - the class
-    # of fault behind merged headings and rows that escape their folder. Gated on
-    # the STREAMTREE_AUDIT env var so production pays nothing; when on, it logs the
-    # first violation with the call chain and latches off, naming the primitive
-    # that broke the contract. Every primitive calls this at its tail.
+    # The mark contract every structural mutation must preserve: each drawn
+    # node's [start,end] region is well-formed (end >= start), lies inside its
+    # parent's region, and is ordered and disjoint from its siblings down the
+    # buffer; a node with no row has no drawn descendant. A violation means a
+    # mark desynced - the class of fault behind merged headings and rows that
+    # escape their folder. Gated on the STREAMTREE_AUDIT env var so production
+    # pays nothing; when on, it logs the first violation with the call chain
+    # and latches off, naming the primitive that broke the contract. Every
+    # primitive calls this at its tail.
     method check_invariant {where} {
         if {![info exists ::env(STREAMTREE_AUDIT)]} return
         if {[info exists ::STREAMTREE_AUDIT_TRIPPED]} return
-        set probs [list]
-        set prev_end ""
-        set prev_key ""
-        foreach fid $Roots {
-            if {![dict exists $Nodes $fid]} continue
-            set s [my node_field $fid start]
-            set e [my node_field $fid end]
-            if {$s eq "" || $e eq ""} continue
-            if {[catch {$Text index $s} si]} { lappend probs "[my node_field $fid key]: unresolvable start"; continue }
-            if {[catch {$Text index $e} ei]} { lappend probs "[my node_field $fid key]: unresolvable end"; continue }
-            if {[$Text compare $e < $s]} {
-                lappend probs "[my node_field $fid key]: end($ei) before start($si)"
-            }
-            if {$prev_end ne "" && [$Text compare $s < $prev_end]} {
-                lappend probs "[my node_field $fid key] start($si) overlaps prev '$prev_key' end($prev_end)"
-            }
-            # TailMark is the append point: it must sit at or after every root's
-            # end. If a folder's content extends past TailMark, TailMark drifted
-            # up into the body and the next append will splice into that folder.
-            if {[$Text compare TailMark < $e]} {
-                lappend probs "TailMark([$Text index TailMark]) drifted above [my node_field $fid key] end($ei)"
-            }
-            set prev_end $ei
-            set prev_key [my node_field $fid key]
-        }
+        set probs [my check_regions $Roots "" ""]
         if {[llength $probs]} {
             set ::STREAMTREE_AUDIT_TRIPPED 1
             puts stderr "INVARIANT @ $where : [join $probs {; }] | TailMark=[$Text index TailMark] end=[$Text index end]"
@@ -296,6 +293,63 @@ oo::class create ::streamtree::StreamTree {
                 puts stderr "   <- [string range [info level $l] 0 70]"
             }
         }
+    }
+    # The contract over one sibling set and, within each sibling's region, its
+    # children: the violations found, each naming the node's key. A root's
+    # bound is TailMark, the append point, which must sit at or after every
+    # root's end: a root's content past it means TailMark drifted up into the
+    # body and the next append will splice into that root.
+    #
+    # Siblings must not physically overlap, but the gate judges that in BUFFER
+    # order, not store order. A host may draw a sibling set in an order the store
+    # does not hold it in - a sorted view over an arrival-order store, seated
+    # only at the next rebuild (rebuild re-sorts each node's children for exactly
+    # this). Store order out of step with buffer order is a display concern the
+    # rebuild settles, not a mark desync: the marks stay well-formed, disjoint
+    # and nested. A primitive that draws one node out of place keeps its own
+    # store in step (expand and unhide reattach_last); the gate does not stand in
+    # for that.
+    method check_regions {ids ps pe} {
+        set probs [list]
+        set drawn [list]
+        foreach id $ids {
+            if {![dict exists $Nodes $id]} continue
+            set key [my node_field $id key]
+            set s [my node_field $id start]
+            set e [my node_field $id end]
+            if {$s eq "" || $e eq ""} {
+                foreach d [my descendants $id] {
+                    if {[my node_field $d rendered]} { lappend probs "[my node_field $d key]: drawn under undrawn '$key'" }
+                }
+                continue
+            }
+            if {[catch {$Text index $s} si]} { lappend probs "$key: unresolvable start"; continue }
+            if {[catch {$Text index $e} ei]} { lappend probs "$key: unresolvable end"; continue }
+            if {[$Text compare $e < $s]} {
+                lappend probs "$key: end($ei) before start($si)"
+            }
+            if {$ps eq ""} {
+                if {[$Text compare TailMark < $e]} {
+                    lappend probs "TailMark([$Text index TailMark]) drifted above $key end($ei)"
+                }
+            } elseif {[$Text compare $s <= $ps] || [$Text compare $e > $pe]} {
+                lappend probs "$key \[$si,$ei\] escapes its parent \[$ps,$pe\]"
+            }
+            lappend probs {*}[my check_regions [my node_field $id children] $si $ei]
+            lassign [split $si .] sl sc
+            lappend drawn [list [expr {$sl * 100000000 + $sc}] $si $ei $key]
+        }
+        set prev_end ""
+        set prev_key ""
+        foreach r [lsort -integer -index 0 $drawn] {
+            lassign $r _ si ei key
+            if {$prev_end ne "" && [$Text compare $si < $prev_end]} {
+                lappend probs "$key start($si) overlaps '$prev_key' end($prev_end)"
+            }
+            set prev_end $ei
+            set prev_key $key
+        }
+        return $probs
     }
 
     # ---- widget options ----------------------------------------------
@@ -904,19 +958,14 @@ oo::class create ::streamtree::StreamTree {
         return [list [my node_field $best kind] [my node_field $best key]]
     }
 
-    # Every node currently drawn in the widget, parents before children: each
-    # root (folder headings are always drawn), each root's rendered session
-    # children, and those sessions' rendered subagent children.
+    # Every node currently drawn in the widget, parents before children and
+    # siblings in store order, to any depth. A root left out by render_skip is
+    # absent along with everything under it.
     method all_rendered_nodes {} {
         set out [list]
-        foreach fid $Roots {
-            lappend out $fid
-            foreach sid [my node_field $fid children] {
-                if {![my node_field $sid rendered]} continue
-                lappend out $sid
-                foreach cid [my node_field $sid children] {
-                    if {[my node_field $cid rendered]} { lappend out $cid }
-                }
+        foreach rid $Roots {
+            foreach id [list $rid {*}[my descendants $rid]] {
+                if {[my node_field $id rendered]} { lappend out $id }
             }
         }
         return $out
@@ -933,10 +982,10 @@ oo::class create ::streamtree::StreamTree {
 
     # Drawn is the same roster the walk steps over, so a node in the store with
     # no row on screen (a shut folder's child) is refused the cursor rather than
-    # sought out and scrolled to.
+    # sought out and scrolled to; reveal is the way to bring such a node out.
     method cursor_set {id} {
         if {$id eq $Cursor} return
-        if {$id ne "" && $id ni [my all_rendered_nodes]} return
+        if {$id ne "" && !([my node_exists $id] && [my node_field $id rendered])} return
         set prev $Cursor
         set Cursor $id
         if {$id ne ""} { $Text see [my node_field $id start] }
@@ -1124,11 +1173,23 @@ oo::class create ::streamtree::StreamTree {
     # one home for the right-gravity-temp-mark insert and the ancestor-end
     # advance that the per-kind render methods each used to repeat: a left-gravity
     # end mark stays left of an insert, so every ancestor whose end currently
-    # sits at the append point must be carried forward past the new row (a folder
-    # end follows only its own last session down; a session in the middle relies
-    # on the insert shifting the lower end mark on its own). Both insert and
-    # expand/unhide route through here.
+    # sits at the append point must be carried forward past the new row (an
+    # ancestor's end follows only its own last descendant down; a node in the
+    # middle relies on the insert shifting the lower end mark on its own). Both
+    # insert and expand/unhide route through here.
     method render_row {id} {
+        # Draw editable and restore, as the primitives do. render_row is the one
+        # method that inserts a row's text; every primitive that reaches it has
+        # already made the widget editable, but a subclass helper (a host's own
+        # render_session, say) reaches it directly and can be one insert past a
+        # bracket that left the widget disabled. An insert against a disabled
+        # widget is silently dropped: the row draws no line, start and end land
+        # on the same empty point, and the right-gravity start splits from the
+        # left-gravity end on the next insert there - end before start. Self-
+        # bracketing here is a no-op for a caller already editable and keeps the
+        # zero-length row from ever forming.
+        set _st [$Text cget -state]
+        $Text configure -state normal
         set parent [my node_field $id parent]
         set kind   [my node_field $id kind]
         if {$parent eq ""} {
@@ -1143,7 +1204,7 @@ oo::class create ::streamtree::StreamTree {
         }
         set insidx [$Text index $ins]
         set climb [list]
-        for {set p $parent} {$p ne ""} {set p [my node_field $p parent]} {
+        foreach p [my ancestors $id] {
             set pe [my node_field $p end]
             if {$pe ne "" && [$Text compare $pe == $insidx]} { lappend climb $p }
         }
@@ -1169,6 +1230,7 @@ oo::class create ::streamtree::StreamTree {
         my node_set $id rendered 1
         foreach a $climb { $Text mark set [my node_field $a end] $rowend }
         my on_row_rendered $id
+        $Text configure -state $_st
     }
 
     # Un-render every node at once, for the two whole-buffer paths (rebuild,
@@ -1212,8 +1274,10 @@ oo::class create ::streamtree::StreamTree {
         my node_set $id rendered 0
     }
 
-    # insert: add a node and draw it if its parent is open. parent "" makes a
-    # root. -pos {before <id>} orders it before a sibling, else it appends.
+    # insert: add a node and draw it when it has a place in the view (placed:
+    # its parent drawn and open, itself not hidden; render_skip is not asked of
+    # a node whose content has yet to arrive). parent "" makes a root. -pos
+    # {before <id>} orders it before a sibling, else it appends.
     method insert {parent kind key payload args} {
         set before ""
         foreach {opt val} $args {
@@ -1244,8 +1308,7 @@ oo::class create ::streamtree::StreamTree {
         # (a folder heading counts its sessions through the folder->id map), so
         # the index must exist by the time render_row builds the line.
         my on_node_created $id
-        set open [expr {$parent eq "" || [my node_field $parent expanded]}]
-        if {$open && ![my node_field $id hidden]} { my render_row $id }
+        if {[my placed $id]} { my render_row $id }
         $Text configure -state $st
         my check_invariant insert
         return $id
@@ -1278,6 +1341,16 @@ oo::class create ::streamtree::StreamTree {
         if {$id eq $Cursor} { set Cursor "" }
         dict unset Nodes $id
     }
+    # Put a node last among its siblings, in the store as at the append point.
+    method reattach_last {id} {
+        my detach_child $id
+        set parent [my node_field $id parent]
+        if {$parent eq ""} {
+            lappend Roots $id
+        } else {
+            my node_set $parent children [list {*}[my node_field $parent children] $id]
+        }
+    }
     # Remove a node from its parent's child list (or from Roots for a root).
     method detach_child {id} {
         set parent [my node_field $id parent]
@@ -1299,7 +1372,7 @@ oo::class create ::streamtree::StreamTree {
         $Text configure -state normal
         if {[my node_field $id rendered]} {
             $Text delete [my node_field $id start] [my node_field $id end]
-            foreach c [my node_field $id children] { my reset_subtree_render $c }
+            foreach d [my descendants $id] { my drop_render_marks $d }
         }
         my drop_render_marks $id
         $Text configure -state $st
@@ -1328,21 +1401,29 @@ oo::class create ::streamtree::StreamTree {
         my check_invariant item
     }
 
-    # expand: open a node and draw its not-hidden children. populate runs first,
-    # so a lazy host realizes the children this expand is about to draw. On a
-    # node that is not itself rendered, expand records the flag alone; the
-    # children draw when the node's own row does, or on the next rebuild. That
-    # makes opening one level everywhere a one-liner over any id set, e.g.
+    # expand: open a node and draw what is due under it, each child with its
+    # own open subtree. populate runs first, so a lazy host realizes the
+    # children this expand is about to draw. A node with no row of its own
+    # draws it here when it is due, its subtree with it: the door back for a
+    # node render_skip kept out while it was empty. One whose parent is shut
+    # records the flag alone, and draws when the parent's row does, or on the
+    # next rebuild. That makes opening one level everywhere a one-liner over
+    # any id set, e.g.
     #   $t batch { lmap id [$t roots] { $t expand $id } }
+    # and expand_subtree opens every level under one node.
     method expand {id} {
         set st [$Text cget -state]
         $Text configure -state normal
         my populate $id
         my node_set $id expanded 1
         if {[my node_field $id rendered]} {
-            foreach c [my node_field $id children] {
-                if {![my node_field $c hidden]} { my render_row $c }
-            }
+            my render_below $id
+        } elseif {[my drawable $id]} {
+            # Drawn late, the node lands as a late insert does: at its parent's
+            # append point, so last among its siblings in the store as in the
+            # view, for the next rebuild to seat under the sort.
+            my reattach_last $id
+            my render_subtree $id
         }
         $Text configure -state $st
         my check_invariant expand
@@ -1362,36 +1443,59 @@ oo::class create ::streamtree::StreamTree {
                 $Text delete $bodystart $em
                 $Text mark set $em $bodystart
             }
-            foreach c [my node_field $id children] { my reset_subtree_render $c }
+            foreach d [my descendants $id] { my drop_render_marks $d }
         }
         $Text configure -state $st
         my check_invariant collapse
     }
-    # Clear render marks across a node and its descendants (their text just went
-    # with a bulk body delete), so a later expand redraws them from scratch.
-    method reset_subtree_render {id} {
-        foreach c [my node_field $id children] { my reset_subtree_render $c }
-        my drop_render_marks $id
-    }
 
     # hide/unhide: a reversible per-node filter. hide removes the row in place
     # (same mechanism as detach) and marks it hidden; unhide clears the flag and
-    # redraws it when its parent is open. Re-ordering a shown row into sorted
-    # position is a rebuild, not an unhide.
+    # redraws it, open subtree and all, when its row is due (drawable).
+    # Re-ordering a shown row into sorted position is a rebuild, not an unhide.
     method hide {id} {
         my node_set $id hidden 1
         my detach $id
     }
     method unhide {id} {
         my node_set $id hidden 0
-        set parent [my node_field $id parent]
-        if {$parent eq "" || [my node_field $parent expanded]} {
-            set st [$Text cget -state]
-            $Text configure -state normal
-            my render_row $id
-            $Text configure -state $st
-            my check_invariant unhide
+        if {![my drawable $id]} return
+        set st [$Text cget -state]
+        $Text configure -state normal
+        # The redraw lands at the parent's append point, last among the drawn
+        # siblings; the store follows the view (reattach_last) so the node is
+        # last there too, for the debounced resort to seat - the same late-draw
+        # contract expand lives under. Left first in the store while drawn last,
+        # the row would be spliced out of store order and jump on the next
+        # rebuild under an order-keeping sort.
+        my reattach_last $id
+        my render_subtree $id
+        $Text configure -state $st
+        my check_invariant unhide
+    }
+
+    # reveal: bring a node's row into view whatever shuts it away, treeview's
+    # `see`. Every shut ancestor opens, outermost first so each draws under a
+    # drawn parent, then the row scrolls into view. A node hidden or skipped
+    # has no row to show, and the view stays put.
+    method reveal {id} {
+        my batch {
+            foreach a [lreverse [my ancestors $id]] {
+                if {![my node_field $a expanded]} { my expand $a }
+            }
         }
+        if {[my node_field $id rendered]} { $Text see [my node_field $id start] }
+    }
+
+    # expand_subtree: open a node and every node under it, populated as it
+    # goes so a lazy tree opens to its full depth, the view anchored once for
+    # the whole sweep.
+    method expand_subtree {id} {
+        my batch { my open_below $id }
+    }
+    method open_below {id} {
+        my expand $id
+        foreach c [my node_field $id children] { my open_below $c }
     }
 
     # move: reparent a node, then rebuild. A move can re-key the node and folder
@@ -1408,20 +1512,20 @@ oo::class create ::streamtree::StreamTree {
 
     # rebuild: re-render the whole list from the durable store, preserving the
     # reader's view. The store survives (it is the model), so this re-sorts the
-    # sibling order in place (the sort_siblings hook, keeping every node), then
-    # wipes the buffer and re-lays each root and its open, not-hidden
-    # descendants. A node the render_skip hook rejects (a folder with no viewable
-    # row) stays in the store but leaves the view. Store order tracks display
-    # order, so a sort reorders Roots and each node's children, not just the
-    # painted sequence.
+    # sibling order in place (rank_siblings over the kind_rank and sort_siblings
+    # hooks, keeping every node), then wipes the buffer and re-lays every node
+    # whose row is due, root to leaf. A node the render_skip hook rejects stays
+    # in the store but leaves the view, its subtree with it. Store order tracks
+    # display order, so a sort reorders Roots and each node's children, not
+    # just the painted sequence.
     method rebuild {} {
         set st [$Text cget -state]
         $Text configure -state normal
         set at_top [expr {[lindex [$Text yview] 0] <= 0.0001}]
         set anchor [my top_visible_node]
-        set Roots [my sort_siblings $Roots]
+        set Roots [my rank_siblings $Roots]
         foreach id [my all_node_ids] {
-            my node_set $id children [my sort_siblings [my node_field $id children]]
+            my node_set $id children [my rank_siblings [my node_field $id children]]
         }
         # Un-render everything (marks, text, tags) so the re-render starts from
         # a clean buffer with no stale marks left to be dragged into an overlap.
@@ -1430,8 +1534,7 @@ oo::class create ::streamtree::StreamTree {
         $Text mark set TailMark "end-1c"
         $Text mark gravity TailMark right
         foreach rid $Roots {
-            if {[my render_skip $rid]} continue
-            my render_subtree $rid
+            if {[my drawable $rid]} { my render_subtree $rid }
         }
         if {$at_top} { $Text yview moveto 0 } else { my rebuild_restore $anchor }
         $Text configure -state $st
@@ -1450,23 +1553,61 @@ oo::class create ::streamtree::StreamTree {
         my check_invariant reset
     }
 
-    # Render a node and, when it is open, its not-hidden children in store order.
+    # Whether a node has a place in the view: not hidden, and, below a root,
+    # under a parent whose own row is drawn and open. insert draws a new node
+    # on this alone: what decides a render_skip (the node's children, its
+    # aggregates) has not arrived at insert, so a skip asked then would answer
+    # for content that is not there.
+    method placed {id} {
+        if {[my node_field $id hidden]} { return 0 }
+        set p [my node_field $id parent]
+        return [expr {$p eq "" || ([my node_field $p rendered] && [my node_field $p expanded])}]
+    }
+    # Whether a node's row is due now: placed, and not left out by render_skip.
+    # Every path that draws a node with its content in place (expand, unhide,
+    # rebuild) asks this first, so a node kept out stays out whichever of them
+    # reaches it, and expand draws a node the skip kept out once it is due.
+    method drawable {id} {
+        return [expr {[my placed $id] && ![my render_skip $id]}]
+    }
+    # Render a node and, when it is open, what is due under it.
     method render_subtree {id} {
         my render_row $id
-        if {[my node_field $id expanded]} {
-            foreach c [my node_field $id children] {
-                if {[my node_field $c hidden]} continue
-                my render_subtree $c
-            }
+        if {[my node_field $id expanded]} { my render_below $id }
+    }
+    # Draw what is due under a drawn, open node: each drawable child with its
+    # own open subtree, in store order.
+    method render_below {id} {
+        foreach c [my node_field $id children] {
+            if {[my drawable $c]} { my render_subtree $c }
         }
     }
     # Every node id in the store, for the pre-rebuild render-state reset.
     method all_node_ids {} { return [dict keys $Nodes] }
-    # Reorder a sibling set for display, keeping every node (a sort, not a
-    # filter). Default keeps store order; the subclass applies the active sort.
+    # A sibling set in display order: the nodes of one kind kept together, the
+    # kinds in kind_rank order (ties keep first-seen order), each kind's run in
+    # the order sort_siblings gives it. A set of one kind, the common case,
+    # goes to sort_siblings whole, so the hook only ever sees one kind.
+    method rank_siblings {ids} {
+        if {[llength $ids] < 2} { return $ids }
+        set runs [dict create]
+        foreach id $ids { dict lappend runs [my node_field $id kind] $id }
+        if {[dict size $runs] < 2} { return [my sort_siblings $ids] }
+        set out [list]
+        foreach e [lsort -integer -index 1 [lmap k [dict keys $runs] { list $k [my kind_rank $k] }]] {
+            lappend out {*}[my sort_siblings [dict get $runs [lindex $e 0]]]
+        }
+        return $out
+    }
+    # The integer rank a kind's run takes among siblings of mixed kinds, lowest
+    # first (folders above files, say). Default ranks every kind alike.
+    method kind_rank {kind} { return 0 }
+    # Reorder a sibling set of one kind for display, keeping every node (a sort,
+    # not a filter). Default keeps store order; the subclass applies the active sort.
     method sort_siblings {ids} { return $ids }
-    # Whether to leave a node (and its subtree) out of the rendered view while
-    # keeping it in the store. Default renders everything.
+    # Whether to leave a node (and its subtree) out of the view while keeping it
+    # in the store, asked wherever a node is drawn with its content in place
+    # (never at insert). Default renders everything.
     method render_skip {id} { return 0 }
     # Re-pin the view to a {kind key} anchor after a rebuild. Default best-effort.
     method rebuild_restore {anchor} {}
@@ -1497,7 +1638,7 @@ oo::class create ::streamtree::StreamTree {
         set newend [$Text index $mark]
         set oldend [$Text index [my node_field $id end]]
         $Text mark set [my node_field $id end] $newend
-        for {set p [my node_field $id parent]} {$p ne ""} {set p [my node_field $p parent]} {
+        foreach p [my ancestors $id] {
             set pe [my node_field $p end]
             if {$pe ne "" && [$Text compare $pe == $oldend]} { $Text mark set $pe $newend }
         }
