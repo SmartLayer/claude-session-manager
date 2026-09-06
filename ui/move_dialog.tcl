@@ -2,9 +2,9 @@ package require Tcl 9
 package require Tk
 
 # ::questlog::ui::move_dialog - modal picker for the "Move session to another
-# project" operation. Lists every folder under ~/.claude/projects/, plus
-# a free-text entry for a cwd that has no project folder yet. The single
-# entry point `open` takes a callback; the caller routes the chosen cwd
+# project" operation. Lists the session list's folders as the list shows
+# them, plus a free-text entry for a cwd that has no project folder yet. The
+# single entry point `open` takes a callback; the caller routes the chosen cwd
 # through ::questlog::path::ensure_project_folder and ::questlog::path::move_session.
 #
 # Single-instance: only one move dialog is open at a time (modal). Held
@@ -16,6 +16,7 @@ namespace eval ::questlog::ui::move_dialog {
     variable Tv ""
     variable EntryVar ""
     variable CurrentFolder ""
+    variable Folders {}       ;# the list's folder roster: {key dir label depth} each
     variable OnDone ""
     variable RowToCwd [dict create]
     variable LiveCb ""        ;# cb: () -> display names of selected sessions
@@ -29,18 +30,21 @@ namespace eval ::questlog::ui::move_dialog {
 # transcript out from under the running process), so while any are live the
 # Move button is disabled and a tip names them. The dialog rechecks on a timer,
 # so closing the session in its terminal re-enables Move with no reopen - the
-# same live-tracking the rename dialog uses.
-proc ::questlog::ui::move_dialog::open {parent count current_folder on_done live_cb} {
+# same live-tracking the rename dialog uses. folders is the list's folder
+# roster (SessionList folder_roster), the destinations offered.
+proc ::questlog::ui::move_dialog::open {parent count current_folder folders on_done live_cb} {
     variable Top
     variable Tv
     variable EntryVar
     variable CurrentFolder
+    variable Folders
     variable OnDone
     variable RowToCwd
     variable LiveCb
     variable LiveNames
 
     set CurrentFolder $current_folder
+    set Folders $folders
     set OnDone $on_done
     set LiveCb $live_cb
     set LiveNames {}
@@ -138,24 +142,25 @@ proc ::questlog::ui::move_dialog::track_live {} {
 proc ::questlog::ui::move_dialog::populate {} {
     variable Tv
     variable CurrentFolder
+    variable Folders
     variable RowToCwd
-    # One row per real directory on disk that the folder basename could
-    # decode to. Folders whose original directory no longer exists (the
-    # "black hole" case) are skipped: moving into them would point a
-    # resume command at nothing. ResolveFolder is intentionally bypassed
-    # here; the dialog wants ground truth from the filesystem rather
-    # than a cache that may have been seeded by an honest scan in the
-    # current process.
+    # One row per folder of the list's tree, in the tree's order, stepped in
+    # to its depth and labelled as its heading is, so the picker reads as the
+    # list does. The source folder is left out; the folders beneath it stay,
+    # since a session can move down into its own project. A folder with no
+    # directory to move into (one the resolver could not place, or whose
+    # directory is gone) is left out too: moving into it would point a resume
+    # command at nothing. The directory is checked on disk here rather than
+    # trusted from the heading, which the list draws from a cache.
     set seq 0
-    foreach folder [::questlog::path::list_all_projects] {
-        if {$folder eq $CurrentFolder} continue
-        set cwds [::questlog::path::candidate_cwds_for $folder]
-        foreach cwd $cwds {
-            set iid [format "F:%d" [incr seq]]
-            set label [::questlog::path::pretty_home $cwd]
-            $Tv insert {} end -id $iid -text $label
-            dict set RowToCwd $iid $cwd
-        }
+    foreach f $Folders {
+        if {[dict get $f key] eq $CurrentFolder} continue
+        set cwd [dict get $f dir]
+        if {![file isdirectory $cwd]} continue
+        set iid [format "F:%d" [incr seq]]
+        $Tv insert {} end -id $iid \
+            -text "[string repeat {    } [dict get $f depth]][dict get $f label]"
+        dict set RowToCwd $iid $cwd
     }
 }
 

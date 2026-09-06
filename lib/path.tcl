@@ -2,7 +2,7 @@ package require Tcl 9
 
 namespace eval ::questlog::path {
     namespace export encode_cwd projects_root pretty_home display_label \
-        list_all_projects ensure_project_folder candidate_cwds_for \
+        ensure_project_folder candidate_cwds_for \
         move_session set_bookmark clear_bookmark launch_cwd canon_dir \
         container_tree
 }
@@ -111,19 +111,6 @@ proc ::questlog::path::display_label {cwd folder_basename {parent_cwd ""}} {
     if {$parent_cwd eq ""} { return [pretty_home $cwd] }
     set pre [expr {$parent_cwd eq "/" ? "/" : "$parent_cwd/"}]
     return [string range $cwd [string length $pre] end]
-}
-
-# All project folder basenames currently on disk under ~/.claude/projects/.
-# The move picker uses this so empty projects (no recent sessions) are
-# still reachable as destinations.
-proc ::questlog::path::list_all_projects {} {
-    set root [projects_root]
-    if {![file isdirectory $root]} { return [list] }
-    set out [list]
-    foreach d [glob -nocomplain -directory $root -type d -- *] {
-        lappend out [file tail $d]
-    }
-    return [lsort $out]
 }
 
 # Return the project-folder path for a cwd, creating it if absent.

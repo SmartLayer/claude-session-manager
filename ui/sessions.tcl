@@ -2500,14 +2500,20 @@ oo::class create ::questlog::ui::SessionList {
         return $out
     }
 
-    # A path->payload map over a folder's sessions, the source sort_paths reads
-    # its key fields (mtime/size/cost/turns/duration_secs) from.
-    method folder_session_src {folder} {
-        set src [dict create]
-        foreach path [my folder_session_paths $folder] {
-            dict set src $path [my session_payload $path]
+    # Every folder in the store in display order, parents before children,
+    # each as {key dir label depth}: the destinations the move picker lists,
+    # labelled and stepped in as their headings are.
+    method folder_roster {} {
+        set out [list]
+        foreach rid [my roots] {
+            foreach id [list $rid {*}[my descendants $rid]] {
+                if {[my node_field $id kind] ne "folder"} continue
+                lappend out [dict create key [my node_field $id key] \
+                    dir [my node_pget $id dir] label [my folder_label $id] \
+                    depth [my nesting $id]]
+            }
         }
-        return $src
+        return $out
     }
 
     # True while a filter is narrowing the view, so some loaded sessions may be

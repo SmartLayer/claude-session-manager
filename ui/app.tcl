@@ -989,8 +989,9 @@ proc ::questlog::ui::app::on_open {path lineno} {
 # ---- move callbacks ----------------------------------------------------
 
 # paths is a list of session paths to move to a single destination. The
-# dialog excludes the source's own folder only when exactly one session is
-# moved; a group may span folders, so no folder is excluded then.
+# dialog offers the list's folders and excludes the source's own only when
+# exactly one session is moved; a group may span folders, so no folder is
+# excluded then.
 proc ::questlog::ui::app::on_move_request {paths} {
     variable SessionList
     set current_folder ""
@@ -1000,6 +1001,7 @@ proc ::questlog::ui::app::on_move_request {paths} {
         set current_folder [$SessionList sget $p folder]
     }
     ::questlog::ui::move_dialog::open . [llength $paths] $current_folder \
+        [$SessionList folder_roster] \
         [list [namespace current]::on_picker_done $paths] \
         [list [namespace current]::live_move_names $paths]
 }
