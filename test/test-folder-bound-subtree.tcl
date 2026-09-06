@@ -4,9 +4,9 @@
 # folder to the app, the app hands the folder's directory to the toolbar's
 # subtree facet, and a scan under that bound admits the parent's sessions and
 # the nested folder's alike while an unrelated root stays out. And a session
-# pulled in behind shut headings (show_excluded's open_folder_node) opens
-# every folder above it, so a nested folder's session is in view after the
-# rebuild.
+# pulled in behind shut headings (show_excluded's reveal_session) opens
+# every folder above it, marker and all, so a nested folder's session is in
+# view.
 #
 # The corpus, under a sandbox $HOME (every name fictional):
 #   ~/proj/press            a session; the root
@@ -113,12 +113,17 @@ scan_with [dict create since 30d]
 $SL toggle_folder $F_PRESS
 update
 check "the root shut, its nested folder is off the view" [$SL folder_attached $F_PLATEN] 0
-$SL open_folder_node $F_PLATEN
-$SL rebuild
+$SL reveal_session $platen1
 update
-check "opening the nested folder's node opens every folder above it, so its session is drawn" \
+check "revealing the nested folder's session opens every folder above it, so it is drawn" \
     [list [$SL folder_expanded $F_PRESS] [$SL folder_expanded $F_PLATEN] [$SL sflag $platen1 rendered]] \
     {1 1 1}
+set TX [set [info object namespace $SL]::Text]
+check "the headings it opened show the open marker" \
+    [lmap f [list $F_PRESS $F_PLATEN] {
+        string index [$TX get [$SL node_field [$SL fid $f] start]] 0
+    }] {▾ ▾}
+check "the audit is clean after the reveal" [$SL audit] {}
 
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]

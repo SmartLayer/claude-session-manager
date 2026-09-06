@@ -3930,6 +3930,7 @@ oo::class create ::questlog::ui::SessionList {
     # filter passes attr_admits on its own.
     method show_excluded {} {
         set added 0
+        set shown [list]
         foreach m [my loadable_members] {
             set path [dict get $m resolved]
             set row [{*}$OnScanPath $path]
@@ -3941,24 +3942,33 @@ oo::class create ::questlog::ui::SessionList {
             if {![my has_session $path]} { my model_add_session $path $row }
             $Text configure -state disabled
             dict set Pinned [my sid $path] 1
-            my open_folder_node [my sget $path folder]
+            lappend shown $path
             set added 1
         }
         # rebuild is hidden-aware and owns its own widget state: it reseats every
         # folder from the store, so the new row lands in its place under the filter
-        # rather than being appended past the list's end.
+        # rather than being appended past the list's end. A browse folder is
+        # created shut, so the row is then brought into view through whatever
+        # headings shut it away.
         if {$added} { my rebuild }
+        foreach path $shown { my reveal_session $path }
         my refresh_filter_note
     }
 
-    # Mark a folder and every folder above it open in the store without drawing;
-    # the rebuild that follows draws its shown rows. A browse folder is created
-    # collapsed, and a session pulled in behind a collapsed heading would be
-    # loaded and still invisible.
-    method open_folder_node {folder} {
-        if {![my has_folder $folder]} return
-        set fid [my fid $folder]
-        foreach id [list $fid {*}[my ancestors $fid]] { my node_set $id expanded 1 }
+    # Bring a session's row into view whatever shuts it away: the base
+    # class's reveal opens every shut folder above it and scrolls to the row,
+    # and the headings it opened are redrawn for their marker, as
+    # toggle_folder redraws after its expand. A row the filter hides has no
+    # row to show and the view stays put.
+    method reveal_session {path} {
+        if {![my has_session $path]} return
+        set sid [my sid $path]
+        set shut [lmap a [my ancestors $sid] {
+            if {[my node_field $a expanded]} continue
+            set a
+        }]
+        my reveal $sid
+        foreach a $shut { my redraw_folder_heading [my node_field $a key] }
     }
 
     # The widen button is only ever drawn for a reason that names a criterion, and
