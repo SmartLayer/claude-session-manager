@@ -43,7 +43,7 @@ source [file join $ROOT lib search.tcl]
 
 # Isolated corpus. HOME points the exec'd CLI at the same tree the in-process
 # resolver returns, so the two search paths read one corpus.
-set TMP /tmp/questlog-diff-test
+set TMP /tmp/questlog-diff-test-[pid]
 set CORPUS [file join $TMP .claude projects]
 proc ::questlog::path::projects_root {} { return $::CORPUS }
 set ::env(HOME) $TMP

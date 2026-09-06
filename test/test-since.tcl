@@ -11,8 +11,9 @@ package require logman
 source [file join $ROOT lib match.tcl]
 source [file join $ROOT lib scan.tcl]
 
-# Synthetic projects tree under /tmp/questlog-test-since.
-proc ::questlog::path::projects_root {} { return /tmp/questlog-test-since }
+# Synthetic projects tree under a per-process /tmp directory.
+set SINCEROOT /tmp/questlog-test-since-[pid]
+proc ::questlog::path::projects_root {} { return $::SINCEROOT }
 
 set fails 0
 proc check {name expected actual} {
@@ -92,15 +93,15 @@ check label_abs \
     [::questlog::scan::since_label 2026-04-01]
 
 # ---- list_paths_for: a since bound prunes the scan corpus ----------
-::questlog::path::_real_file delete -force /tmp/questlog-test-since
-::questlog::path::_real_file mkdir /tmp/questlog-test-since/-home-test-code-foo
+::questlog::path::_real_file delete -force $SINCEROOT
+::questlog::path::_real_file mkdir $SINCEROOT/-home-test-code-foo
 
-set recent /tmp/questlog-test-since/-home-test-code-foo/recent.jsonl
+set recent $SINCEROOT/-home-test-code-foo/recent.jsonl
 set fh [open $recent w]
 puts $fh {{"type":"user","message":{"content":"recent"},"cwd":"/home/test/code/foo"}}
 close $fh
 
-set old /tmp/questlog-test-since/-home-test-code-foo/old.jsonl
+set old $SINCEROOT/-home-test-code-foo/old.jsonl
 set fh [open $old w]
 puts $fh {{"type":"user","message":{"content":"old"},"cwd":"/home/test/code/foo"}}
 close $fh
@@ -144,7 +145,7 @@ set next [dict create mtime [clock add $abs_epoch 1 day]]
 check rm_until_abs_keeps_eod  1 [::questlog::scan::row_in_bounds [dict create since all until 2026-04-01] $eod]
 check rm_until_abs_drops_next 0 [::questlog::scan::row_in_bounds [dict create since all until 2026-04-01] $next]
 
-::questlog::path::_real_file delete -force /tmp/questlog-test-since
+::questlog::path::_real_file delete -force $SINCEROOT
 
 if {$fails > 0} {
     puts "$fails failures"

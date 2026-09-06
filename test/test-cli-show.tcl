@@ -132,9 +132,9 @@ check "resolve_session: an existing file path is taken as-is" \
 # A bare uuid resolves against the projects store. Override projects_root to a
 # temp tree (the test-scan idiom) and build it through _real_file, since
 # lib/path.tcl guards file mkdir/delete outside its own namespace.
-set proot /tmp/questlog-show-projects
+set proot /tmp/questlog-show-projects-[pid]
 ::questlog::path::_real_file delete -force $proot
-proc ::questlog::path::projects_root {} { return /tmp/questlog-show-projects }
+proc ::questlog::path::projects_root {} { return $::proot }
 set uuid 11111111-2222-3333-4444-555555555555
 set sessdir [file join $proot -home-user-proj]
 ::questlog::path::_real_file mkdir $sessdir

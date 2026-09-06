@@ -22,7 +22,7 @@ proc check {name got want} {
 proc near {got want} { return [expr {$got ne "null" && $got ne "" && abs($got - $want) < 0.001}] }
 
 # ---- sandbox corpus ------------------------------------------------------
-set HOME /tmp/questlog-test-accrued
+set HOME /tmp/questlog-test-accrued-[pid]
 file delete -force $HOME
 set PROJ [file join $HOME .claude projects -tmp-proj]
 file mkdir $PROJ

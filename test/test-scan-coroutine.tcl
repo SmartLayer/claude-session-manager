@@ -13,7 +13,8 @@ package require logman
 source [file join $ROOT lib match.tcl]
 source [file join $ROOT lib scan.tcl]
 
-proc ::questlog::path::projects_root {} { return /tmp/questlog-test-coro }
+set CORO /tmp/questlog-test-coro-[pid]
+proc ::questlog::path::projects_root {} { return $::CORO }
 
 set fails 0
 proc check {name expected actual} {
@@ -26,10 +27,10 @@ proc check {name expected actual} {
 }
 
 # Build a 300-file synthetic tree (exceeds the 200-record yield boundary).
-::questlog::path::_real_file delete -force /tmp/questlog-test-coro
-::questlog::path::_real_file mkdir /tmp/questlog-test-coro/-home-test-code-many
+::questlog::path::_real_file delete -force $CORO
+::questlog::path::_real_file mkdir $CORO/-home-test-code-many
 for {set i 0} {$i < 300} {incr i} {
-    set fh [open [format /tmp/questlog-test-coro/-home-test-code-many/sess-%04d.jsonl $i] w]
+    set fh [open [format $CORO/-home-test-code-many/sess-%04d.jsonl $i] w]
     puts $fh "{\"type\":\"user\",\"message\":{\"content\":\"prompt $i\"},\"cwd\":\"/home/test/code/many\",\"timestamp\":\"2026-04-25T10:00:00.000Z\"}"
     puts $fh "{\"type\":\"assistant\",\"message\":{\"content\":\"reply $i\"}}"
     puts $fh "{\"type\":\"user\",\"message\":{\"content\":\"again $i\"}}"
@@ -50,9 +51,9 @@ check coro_scanned_all 300 $::row_count
 
 # Test 2: epoch cancellation. Mid-flight extend cancels the previous coro.
 # Build another 200 files in a second folder to lengthen the path list.
-::questlog::path::_real_file mkdir /tmp/questlog-test-coro/-home-test-code-second
+::questlog::path::_real_file mkdir $CORO/-home-test-code-second
 for {set i 0} {$i < 200} {incr i} {
-    set fh [open [format /tmp/questlog-test-coro/-home-test-code-second/sess-%04d.jsonl $i] w]
+    set fh [open [format $CORO/-home-test-code-second/sess-%04d.jsonl $i] w]
     puts $fh "{\"type\":\"user\",\"message\":{\"content\":\"second prompt $i\"},\"cwd\":\"/home/test/code/second\"}"
     puts $fh "{\"type\":\"user\",\"message\":{\"content\":\"second again $i\"}}"
     close $fh
@@ -73,12 +74,12 @@ vwait ::done
 # Drain residual events.
 update
 check second_folder_visible 1 \
-    [dict exists $::seen /tmp/questlog-test-coro/-home-test-code-second/sess-0000.jsonl]
+    [dict exists $::seen $CORO/-home-test-code-second/sess-0000.jsonl]
 check first_folder_visible 1 \
-    [dict exists $::seen /tmp/questlog-test-coro/-home-test-code-many/sess-0000.jsonl]
+    [dict exists $::seen $CORO/-home-test-code-many/sess-0000.jsonl]
 
 $s destroy
-::questlog::path::_real_file delete -force /tmp/questlog-test-coro
+::questlog::path::_real_file delete -force $CORO
 
 if {$fails > 0} {
     puts "$fails failures"

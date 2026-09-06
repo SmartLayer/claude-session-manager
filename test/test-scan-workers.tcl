@@ -24,7 +24,7 @@ if {[catch {package require Thread}]} {
     exit 0
 }
 
-set FIX /tmp/questlog-test-workers
+set FIX /tmp/questlog-test-workers-[pid]
 proc ::questlog::path::projects_root {} { return $::FIX }
 
 set fails 0

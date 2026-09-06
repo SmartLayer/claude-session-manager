@@ -15,7 +15,7 @@ set ROOT [file dirname [file dirname [file normalize [info script]]]]
 ::tcl::tm::path add [file join $ROOT vendor]
 
 # Isolated corpus; HOME points the exec'd CLI at it.
-set TMP /tmp/questlog-caps-test
+set TMP /tmp/questlog-caps-test-[pid]
 set CORPUS [file join $TMP .claude projects]
 set ::env(HOME) $TMP
 unset -nocomplain ::env(CLAUDE_CONFIG_DIR)

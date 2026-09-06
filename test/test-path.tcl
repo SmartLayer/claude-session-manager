@@ -30,7 +30,7 @@ check pretty_prefix  "/home/aliceland/x" [::questlog::path::pretty_home "/home/a
 
 # set_bookmark / clear_bookmark: the +x bit toggles, other mode bits are
 # preserved, and a missing path errors.
-set bf /tmp/questlog-test-bookmark.jsonl
+set bf /tmp/questlog-test-bookmark-[pid].jsonl
 set fh [open $bf w]; puts $fh "{}"; close $fh
 ::questlog::path::_real_file attributes $bf -permissions 0o644
 check book_initial_exec 0 [file executable $bf]

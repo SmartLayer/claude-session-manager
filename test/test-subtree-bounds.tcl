@@ -20,7 +20,8 @@ package require logman
 source [file join $ROOT lib match.tcl]
 source [file join $ROOT lib scan.tcl]
 
-proc ::questlog::path::projects_root {} { return /tmp/questlog-subtree-test }
+set SUBROOT /tmp/questlog-subtree-test-[pid]
+proc ::questlog::path::projects_root {} { return $::SUBROOT }
 
 set fails 0
 proc check {name expected actual} {
@@ -34,7 +35,7 @@ proc check {name expected actual} {
 
 # A session whose head records the cwd, two turns so it is a normal row.
 proc mkf {folder cwd uuid} {
-    set dir /tmp/questlog-subtree-test/$folder
+    set dir $::SUBROOT/$folder
     ::questlog::path::_real_file mkdir $dir
     set fh [open $dir/$uuid.jsonl w]
     puts $fh "{\"type\":\"user\",\"cwd\":\"$cwd\",\"timestamp\":\"2026-06-22T10:00:00.000Z\",\"message\":{\"content\":\"hi\"}}"
@@ -43,7 +44,7 @@ proc mkf {folder cwd uuid} {
     close $fh
 }
 
-::questlog::path::_real_file delete -force /tmp/questlog-subtree-test
+::questlog::path::_real_file delete -force $SUBROOT
 mkf -home-test-code-proj      /home/test/code/proj      aaaa
 mkf -home-test-code-proj-sub  /home/test/code/proj/sub  bbbb
 mkf -home-test-code-proj-x    /home/test/code/proj-x    cccc
@@ -70,9 +71,9 @@ check enum_keeps_hyphen    1 [expr {"-home-test-code-proj-x"   in $lp_folders}]
 # exist on the running machine, so the resolver answers the cwd the
 # transcripts record (gone, but named), the stamp carries it, and the bound
 # reads it as the folder's place. The hyphenated sibling still drops. ----
-set rp [$s stamp_subtree [$s scan_one /tmp/questlog-subtree-test/-home-test-code-proj/aaaa.jsonl]]
-set rc [$s stamp_subtree [$s scan_one /tmp/questlog-subtree-test/-home-test-code-proj-sub/bbbb.jsonl]]
-set rx [$s stamp_subtree [$s scan_one /tmp/questlog-subtree-test/-home-test-code-proj-x/cccc.jsonl]]
+set rp [$s stamp_subtree [$s scan_one $SUBROOT/-home-test-code-proj/aaaa.jsonl]]
+set rc [$s stamp_subtree [$s scan_one $SUBROOT/-home-test-code-proj-sub/bbbb.jsonl]]
+set rx [$s stamp_subtree [$s scan_one $SUBROOT/-home-test-code-proj-x/cccc.jsonl]]
 check gone_stamp_recorded    /home/test/code/proj [dict get $rp folder_cwd]
 check gone_exact             1 [::questlog::scan::row_subtree_match $rp $U]
 check gone_child             1 [::questlog::scan::row_subtree_match $rc $U]
@@ -103,7 +104,7 @@ check canon_feeds_confirm_child 1 [::questlog::scan::row_subtree_match $rc $UT]
 # ---- residence: real directories, so folders resolve and residence decides.
 # The move feature files a session into a project folder; the bounds read that
 # filing, not the cwd recorded in the transcript. ----
-set BASE /tmp/questlog-subtree-test-src
+set BASE /tmp/questlog-subtree-test-src-[pid]
 ::questlog::path::_real_file delete -force $BASE
 foreach d [list $BASE/proj $BASE/proj/sub $BASE/other $BASE/we\[i\]rd $BASE/weird] {
     ::questlog::path::_real_file mkdir $d
@@ -117,7 +118,7 @@ mkf [::questlog::path::encode_cwd $BASE/we\[i\]rd] $BASE/we\[i\]rd w001
 mkf [::questlog::path::encode_cwd $BASE/weird]     $BASE/weird     w002
 
 set s2 [::questlog::Scan new {} {}]
-set root /tmp/questlog-subtree-test
+set root $SUBROOT
 set r_res  [$s2 stamp_subtree [$s2 scan_one $root/[::questlog::path::encode_cwd $P]/r001.jsonl]]
 set r_sub  [$s2 stamp_subtree [$s2 scan_one $root/[::questlog::path::encode_cwd $P/sub]/r002.jsonl]]
 set r_min  [$s2 stamp_subtree [$s2 scan_one $root/[::questlog::path::encode_cwd $P]/mv01.jsonl]]
@@ -161,7 +162,7 @@ set all_folders [lsort -unique [lmap p [$s list_paths_for [dict create since all
 check no_scope_walks_other 1 [expr {"-home-test-code-other" in $all_folders}]
 
 $s destroy
-::questlog::path::_real_file delete -force /tmp/questlog-subtree-test
+::questlog::path::_real_file delete -force $SUBROOT
 
 if {$fails > 0} {
     puts "$fails failures"

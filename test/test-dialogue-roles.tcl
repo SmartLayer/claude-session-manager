@@ -24,7 +24,7 @@ source [file join $ROOT lib search.tcl]
 source [file join $ROOT cli commandline.tcl]
 
 # Isolated corpus; HOME points the exec'd CLI at it.
-set TMP /tmp/questlog-dialogue-roles-test
+set TMP /tmp/questlog-dialogue-roles-test-[pid]
 set CORPUS [file join $TMP .claude projects]
 set ::env(HOME) $TMP
 unset -nocomplain ::env(CLAUDE_CONFIG_DIR)

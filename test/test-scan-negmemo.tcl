@@ -26,8 +26,8 @@ source [file join $ROOT lib match.tcl]
 source [file join $ROOT lib scan.tcl]
 source [file join $ROOT lib cost.tcl]
 
-set PROOT /tmp/questlog-negmemo-projects
-proc ::questlog::path::projects_root {} { return /tmp/questlog-negmemo-projects }
+set PROOT /tmp/questlog-negmemo-projects-[pid]
+proc ::questlog::path::projects_root {} { return $::PROOT }
 
 set fails 0
 proc check {name expected actual} {

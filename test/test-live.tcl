@@ -40,10 +40,11 @@ check alive_mismatch 0 [::questlog::ui::live::proc_alive_matching $me 0]
 check dead_pid       0 [::questlog::ui::live::proc_alive_matching $deadpid $mystart]
 
 # ---- running_uuids over a synthetic registry -----------------------
-set ::env(HOME) /tmp/questlog-test-live-home
+set LIVEHOME /tmp/questlog-test-live-home-[pid]
+set ::env(HOME) $LIVEHOME
 unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
-::questlog::path::_real_file delete -force /tmp/questlog-test-live-home
-set sdir /tmp/questlog-test-live-home/.claude/sessions
+::questlog::path::_real_file delete -force $LIVEHOME
+set sdir $LIVEHOME/.claude/sessions
 ::questlog::path::_real_file mkdir $sdir
 
 proc write_rec {fname pid uuid cwd procstart} {
@@ -62,10 +63,10 @@ check alive_present 1 [dict exists $running alive-uuid]
 check dead_absent   0 [dict exists $running dead-uuid]
 check reuse_absent  0 [dict exists $running reuse-uuid]
 check alive_path \
-    /tmp/questlog-test-live-home/.claude/projects/-home-test-code-foo/alive-uuid.jsonl \
+    $LIVEHOME/.claude/projects/-home-test-code-foo/alive-uuid.jsonl \
     [dict get $running alive-uuid]
 
-::questlog::path::_real_file delete -force /tmp/questlog-test-live-home
+::questlog::path::_real_file delete -force $LIVEHOME
 
 if {$fails > 0} {
     puts "$fails failures"
