@@ -1,14 +1,13 @@
 #!/usr/bin/env wish9.0
-# The folder heading's money and bytes are true sums over every stored row,
-# hidden included, so the heading answers what the project spent in the
-# window whatever a list filter is showing; only the COUNT narrows to the
-# shown rows, reading "(N of M)" with M the model count - the hidden count
-# is the per-folder derivation M - N over the loaded nodes. That derivation
-# is exercised for each of the three filters in turn, the model filter
-# included: it hides loaded rows like the other two even though
-# member_filters excludes it (it claims no membership outside the list),
-# which is why the list-global FilterNote goes blank under it while the
-# heading still accounts for every row.
+# The folder heading's figures agree with each other under a list filter:
+# the count reads "(N of M)" with M the store's count, and the bytes, money,
+# machine time and A/H beside it are the sums of the N shown rows, so a
+# heading never prices rows it is not showing. The hidden count is the
+# store's fold less the shown fold. Each of the three filters is exercised
+# in turn, the model filter included: it hides loaded rows like the other
+# two even though member_filters excludes it (it claims no membership
+# outside the list), which is why the list-global FilterNote goes blank
+# under it while the heading still narrows.
 
 package require Tcl 9
 package require Tk
@@ -87,8 +86,8 @@ proc check {name got want} {
     }
 }
 
-# The heading through the paths the render uses: the laid size/cost cells and
-# the subject's count string.
+# The heading through the paths the render uses: the laid cells and the
+# subject's count string.
 proc cell {col} {
     foreach pair [$::SL cell_values [$::SL fid $::FOLDER]] {
         lassign $pair id v
@@ -101,8 +100,8 @@ proc counts {} {
     return $got
 }
 proc hidden {} {
-    return [expr {[dict get [$::SL folder_totals $::FOLDER] count] \
-                  - [$::SL folder_visible_count $::FOLDER]}]
+    return [expr {[dict get [$::SL node_aggregate [$::SL fid $::FOLDER]] count] \
+                  - [dict get [$::SL node_aggregate [$::SL fid $::FOLDER] 1] count]}]
 }
 
 $SL apply_filter [dict create since all]
@@ -112,10 +111,11 @@ after 200 [list set ::scan_done 1]
 vwait ::scan_done
 $SL toggle_folder $FOLDER
 # The cost pass is what puts a model label (and a cost) on a row; run it so
-# the model filter has labels to shut off, as the app's worker would.
-foreach path [list $Ap $Bp $Cp] {
-    $SL refresh_cost $path [::questlog::cost::build_cost_dict \
-                                [::questlog::cost::parse_file $path]]
+# the model filter has labels to shut off, as the app's worker would. The
+# transcripts' stamps are too close to time, so the times are set here.
+foreach path [list $Ap $Bp $Cp] dur {600 1200 300} hum {100 400 300} {
+    set d [::questlog::cost::build_cost_dict [::questlog::cost::parse_file $path]]
+    $SL refresh_cost $path [dict replace $d duration_secs $dur human_secs $hum]
 }
 update
 
@@ -124,36 +124,40 @@ foreach p [list $Ap $Bp $Cp] {
     set cost($p) [$SL sget $p cost]
 }
 
+# What the heading should read over a set of shown rows: each laid cell as
+# a session row would format the same sums.
+proc want {paths} {
+    set sz 0; set cost 0.0; set dur 0; set hum 0
+    foreach p $paths {
+        incr sz $::sz($p); set cost [expr {$cost + $::cost($p)}]
+        incr dur [$::SL sget $p duration_secs]; incr hum [$::SL sget $p human_secs]
+    }
+    return [list [$::SL fmt_size $sz] [::questlog::cost::format_usd $cost] \
+                [::questlog::cost::fmt_dur $dur] [format %.1f [expr {double($dur) / $hum}]]]
+}
+proc cells {} { return [list [cell size] [cell cost] [cell duration] [cell ah]] }
+
 # --- no filter: the heading sums all three and shows a bare count.
 check "no filter: count" [counts] 3
-check "no filter: size cell sums all rows" [cell size] \
-    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
-check "no filter: cost cell sums all rows" [cell cost] \
-    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
+check "no filter: size, cost and time cells sum all rows" [cells] [want [list $Ap $Bp $Cp]]
 check "no filter: nothing hidden" [hidden] 0
 
-# --- bookmarked: only B shows, and every number on the heading says so.
+# --- bookmarked: only B shows, and every figure on the heading says so.
 $SL attr_filter_set bookmarked 1
 update
-check "bookmarked: visible count" [$SL folder_visible_count $FOLDER] 1
+check "bookmarked: visible count" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 1
 check "bookmarked: count reads shown of total" [counts] "1 of 3"
-check "bookmarked: size cell stays the whole sum" [cell size] \
-    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
-check "bookmarked: cost cell stays the whole sum" [cell cost] \
-    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
+check "bookmarked: size, cost and time cells sum the shown rows" [cells] [want [list $Bp]]
 check "bookmarked: hidden = model count - visible" [hidden] 2
 $SL attr_filter_set bookmarked 0
 update
 
-# --- model: shutting off C's label hides C; A and B still sum.
+# --- model: shutting off C's label hides C; A and B are what sums.
 $SL attr_filter_set model [list [::questlog::cost::model_label claude-opus-4-8]]
 update
-check "model: visible count" [$SL folder_visible_count $FOLDER] 2
+check "model: visible count" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 2
 check "model: count reads shown of total" [counts] "2 of 3"
-check "model: size cell stays the whole sum" [cell size] \
-    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
-check "model: cost cell stays the whole sum" [cell cost] \
-    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
+check "model: size, cost and time cells sum the shown rows" [cells] [want [list $Ap $Bp]]
 check "model: hidden = model count - visible" [hidden] 1
 $SL attr_filter_set model [list]
 update
@@ -162,21 +166,17 @@ update
 $SL reconcile_running [dict create aaaa $Ap]
 $SL attr_filter_set running 1
 update
-check "running: visible count" [$SL folder_visible_count $FOLDER] 1
+check "running: visible count" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 1
 check "running: count reads shown of total" [counts] "1 of 3"
-check "running: size cell stays the whole sum" [cell size] \
-    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
-check "running: cost cell stays the whole sum" [cell cost] \
-    [::questlog::cost::format_usd [expr {$cost($Ap) + $cost($Bp) + $cost($Cp)}]]
+check "running: size, cost and time cells sum the shown rows" [cells] [want [list $Ap]]
 check "running: hidden = model count - visible" [hidden] 2
 $SL attr_filter_set running 0
 $SL reconcile_running [dict create]
 update
 
-# --- filters off again: the model sum never moved, so the heading recovers whole.
+# --- filters off again: the store never moved, so the heading recovers whole.
 check "released: count back to bare" [counts] 3
-check "released: size cell sums all rows again" [cell size] \
-    [$SL fmt_size [expr {$sz($Ap) + $sz($Bp) + $sz($Cp)}]]
+check "released: the cells sum all rows again" [cells] [want [list $Ap $Bp $Cp]]
 
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]

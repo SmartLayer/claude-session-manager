@@ -109,8 +109,8 @@ proc ::questlog::cli::main::local_day {ts} {
 # count it lands in (sessions or subagents); ts is the session's first
 # timestamp, which only a parent session carries, so the span and the day set
 # count sessions rather than transcripts. The cost sentinel (-1.0, no rate
-# matched) adds nothing, as the shortstat total has always had it. The one
-# contribution is built as an accumulator of its own and merged, so widening a
+# matched) adds nothing to cost. The one contribution is built as an
+# accumulator of its own and merged, so widening a
 # span is written once, in totals_merge.
 proc ::questlog::cli::main::totals_add {tot ci kind {ts ""}} {
     set one [totals_zero]
@@ -226,7 +226,8 @@ proc ::questlog::cli::main::format_json {folders_dict} {
         
         # The folder's totals ride beside its sessions, so a consumer reading a
         # folder reads what it came to without walking the array. A caller with
-        # no totals (a serializer test, a fixture) emits the shape it always did.
+        # no totals (a serializer test, a fixture) gets a folder object with no
+        # totals field.
         set tail ""
         if {[dict exists $data totals]} {
             set tail ",\"totals\":[format_totals_json [dict get $data totals]]"

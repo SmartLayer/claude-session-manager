@@ -731,7 +731,7 @@ oo::class create ::questlog::ui::SessionList {
     # Re-fit every rendered row's ellipsis after a width change (a base-class
     # hook, called from relayout inside the widget's normal state): each folder
     # heading, each rendered session header, and the children of an expanded
-    # session, which its header's redraw re-lays.
+    # session.
     method relayout_content {} {
         foreach id [my all_rendered_nodes] {
             switch [my node_field $id kind] {
@@ -1067,11 +1067,11 @@ oo::class create ::questlog::ui::SessionList {
     # Two arrivals wait for the rebuild. One a filter hides, which drawn would
     # leave its folder a heading over nothing. One whose folder has no row:
     # dropped by the last rebuild for having nothing visible under it
-    # (render_skip), or shut inside a collapsed ancestor. In the first case the
-    # node keeps its expanded flag but mass_unrender cleared its marks, so there
+    # (render_skip), or shut inside a collapsed ancestor. A dropped folder
+    # keeps its expanded flag but mass_unrender cleared its marks, so there
     # is no append point to draw beneath and the empty end mark reads as a bad
     # text index. Deferring both, the rebuild lays the heading and the row
-    # together; in the second the ancestor's expand draws the subtree.
+    # together; under a shut ancestor, its expand draws the subtree.
     method draw_arrival {path} {
         set folder [my sget $path folder]
         if {[my sflag $path hidden] || ![my folder_attached $folder]} {
@@ -2371,8 +2371,7 @@ oo::class create ::questlog::ui::SessionList {
         # highlight; re-add it from membership, the way redraw_header does. The
         # membership is model state and outlives a rebuild that detached the
         # folder, so the heading has to be drawn before its start mark is read:
-        # relayout_content redraws every drawn heading on a resize, detached
-        # ones included.
+        # a batch's dirty flush reaches a folder a rebuild has since detached.
         if {[my folder_attached $folder] && [my is_folder_selected $folder]} {
             set fm [my node_field [my fid $folder] start]
             $Text tag add selected $fm "$fm lineend"
@@ -2430,9 +2429,10 @@ oo::class create ::questlog::ui::SessionList {
 
     # The folder heading's right-click menu. Kept small and folder-shaped (a
     # bounds action and a reveal), not the session action set, which is built for
-    # a session target. Both actions need the project's working directory: a
-    # folder the resolver cannot place greys both out; one whose directory is
-    # gone still bounds a search by the path it had, but has nowhere to reveal.
+    # a session target. Every action here needs the project's working
+    # directory: a folder the resolver cannot place greys them all out; one
+    # whose directory is gone still bounds a search by the path it had, but
+    # has nowhere to reveal.
     method build_folder_menu {} {
         set FMenu $Top.fmenu
         menu $FMenu -tearoff 0

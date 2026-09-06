@@ -2,10 +2,10 @@
 # Regression test for the streaming-search resort storm.
 #
 # Under a non-default sort, a late metric (cost/turns/duration/A/H) reorders the
-# list, which means a full redraw_all. The cost pass streams results coalesced
+# list, which means a full rebuild. The cost pass streams results coalesced
 # every 80ms, so before the fix the list was wiped and rebuilt on every batch
 # and the scroll snapped to the top (the AnchorTop mark cannot survive
-# redraw_all's `delete 1.0 end`), so a result could not be clicked.
+# rebuild's `delete 1.0 end`), so a result could not be clicked.
 #
 # This drives the fix and asserts:
 #   1. a metric flood debounces to ONE rebuild when arrivals pause;
