@@ -1031,14 +1031,16 @@ proc ::questlog::ui::app::live_move_names {paths} {
 
 # Drop-move resolves the dropped-on folder basename to its real cwd via the
 # canonical resolver. A drop onto a folder without a directory to move into
-# (its project directory is gone, or its basename ambiguous) is refused rather
-# than silently moving into an orphan.
+# (its basename ambiguous, or its project directory gone: the resolver then
+# answers the path the folder had, which is no directory) is refused rather
+# than silently moving into an orphan, each with its own reason.
 proc ::questlog::ui::app::on_drop_move {paths target_folder_basename} {
     variable Scan
     set dst_cwd [$Scan resolve_folder $target_folder_basename]
     if {![file isdirectory $dst_cwd]} {
-        tk_messageBox -icon error -title "Move session" \
-            -message "Cannot resolve destination folder: $target_folder_basename"
+        tk_messageBox -icon error -title "Move session" -message [expr {$dst_cwd eq "" \
+            ? "Cannot resolve destination folder: $target_folder_basename" \
+            : "The destination's directory no longer exists: $dst_cwd"}]
         return
     }
     do_move_batch $paths $dst_cwd

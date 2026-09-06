@@ -138,7 +138,6 @@ oo::class create ::questlog::ui::SessionList {
     # path to its node id.
     variable FolderNode       ;# folder name -> node id
     variable PathNode         ;# session path OR subagent path -> node id
-    variable TagNode          ;# folder node.tag -> node id, for drop hit-testing
     variable SelectedSet      ;# ordered set (dict sid->1) of selected sessions
     variable SelectAnchor     ;# sid a Shift-range extends from, or ""
     variable SelectedFolder   ;# fid whose heading is highlighted, or ""
@@ -256,7 +255,6 @@ oo::class create ::questlog::ui::SessionList {
         next
         set FolderNode [dict create]
         set PathNode [dict create]
-        set TagNode [dict create]
         # A wholesale clear can delete the hovered row out from under a parked
         # pointer; a reveal must not outlive its row, and Tk is not guaranteed
         # to synthesize the <Leave>.
@@ -434,7 +432,6 @@ oo::class create ::questlog::ui::SessionList {
             folder {
                 set htag [my node_field $id tag]
                 set folder [my node_field $id key]
-                dict set TagNode $htag $id
                 set bfolder [my pctsafe $folder]
                 # A click on the marker toggles expand/collapse; a click on the
                 # rest of the heading selects the folder (on_folder_click routes
@@ -458,8 +455,6 @@ oo::class create ::questlog::ui::SessionList {
     method on_before_delete {id} {
         switch [my node_field $id kind] {
             folder {
-                set tag [my node_field $id tag]
-                if {$tag ne ""} { dict unset TagNode $tag }
                 dict unset FolderNode [my node_field $id key]
                 if {$SelectedFolder eq $id} { set SelectedFolder "" }
             }
@@ -3091,15 +3086,28 @@ oo::class create ::questlog::ui::SessionList {
         my peek_enter $kind $text $cursor $sub
     }
 
-    # Resolve a drag point to the folder under it: the base class maps the point to a
-    # text index; a folder heading's drop tag (TagNode) names the target folder.
+    # The folder under a drag point: the innermost drawn folder whose region
+    # (its heading through its last descendant row) holds the point, so a
+    # session dropped anywhere in a folder's body lands in that folder, and
+    # one dropped in a nested folder's heading or body lands in the nested
+    # one. Past the last row there is no folder. The walk descends from the
+    # roots through the one child region that holds the point at each level.
     method drag_hit {X Y} {
-        foreach t [$Text tag names [my index_at $X $Y]] {
-            if {[dict exists $TagNode $t]} {
-                return [my node_field [dict get $TagNode $t] key]
+        set idx [my index_at $X $Y]
+        set hit ""
+        set kids [my roots]
+        while {1} {
+            set found ""
+            foreach id $kids {
+                if {[my node_field $id kind] ne "folder" || ![my node_field $id rendered]} continue
+                if {[$Text compare $idx >= [my node_field $id start]] \
+                    && [$Text compare $idx < [my node_field $id end]]} { set found $id; break }
             }
+            if {$found eq ""} break
+            set hit $found
+            set kids [my node_field $found children]
         }
-        return ""
+        return [expr {$hit eq "" ? "" : [my node_field $hit key]}]
     }
 
     method drag_paint {old new} {
