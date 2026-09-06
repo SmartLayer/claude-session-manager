@@ -94,7 +94,6 @@ set ::scan_done 0
 $::Scan extend [dict create since all min_turns 2]
 after 300 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 update
 
 # The cost second pass is not wired in this harness; land the model labels the
@@ -248,7 +247,6 @@ set ::scan_done 0
 $::Scan extend $snap2
 after 300 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 update
 check "the base class still holds the filter across the bounds change" \
     [$SL attr_filter_get bookmarked] 1

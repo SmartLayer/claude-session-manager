@@ -85,13 +85,12 @@ proc check {name got want} {
     }
 }
 
-# --- 1. Stream both rows in, expand the folder; both render and are in the model.
+# --- 1. Stream both rows in; the lone root opens, so both render and are in the model.
 $SL apply_filter [dict create since all]
 set ::scan_done 0
 $::Scan extend [dict create since all]
 after 200 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 update
 
 check "A in model"   [$SL has_session $Ap] 1

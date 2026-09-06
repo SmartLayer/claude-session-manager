@@ -137,14 +137,16 @@ check "a gone directory's label is the dead remainder" \
     [label_of $F_GONE] grants/spring-2026
 
 # ---- what is drawn ------------------------------------------------------------
-check "browse draws the roots collapsed" [drawn] \
-    [list folder:[file tail $F_ORCHARD] folder:[file tail $F_ANVIL]]
-$SL toggle_folder $F_ORCHARD
-update
-check "opening a folder draws its folders above its sessions" [drawn] \
+# harvest arrived first and opened as the first root; orchard then took its
+# place and opened with it, so what was in view stayed in view. The rest
+# arrived shut.
+check "browse opens the first root by recency and leaves the rest shut" [drawn] \
     [list folder:[file tail $F_ORCHARD] folder:[file tail $F_HARVEST] \
-          folder:[file tail $F_ESPALIER] folder:[file tail $F_GONE] \
-          session:orchard-1.jsonl folder:[file tail $F_ANVIL]]
+          session:harvest-1.jsonl folder:[file tail $F_ESPALIER] \
+          folder:[file tail $F_GONE] session:orchard-1.jsonl \
+          folder:[file tail $F_ANVIL]]
+check "the folder the root took over is still open inside it" \
+    [$SL folder_expanded $F_HARVEST] 1
 # The label may truncate to the window; the marker sits past it, by the count.
 check "the gone folder's heading carries the marker" \
     [string match "* $::questlog::ui::GLYPH_GONE (1)*" [heading_text $F_GONE]] 1
@@ -152,8 +154,17 @@ check "a living folder's heading carries none" \
     [string match "* harvest (1)*" [heading_text $F_HARVEST]] 1
 $SL toggle_folder $F_HARVEST
 update
-check "opening a nested folder draws its session under its heading" \
+check "shutting a nested folder takes its session off the view" \
+    [lsearch [drawn] session:harvest-1.jsonl] -1
+$SL toggle_folder $F_HARVEST
+update
+check "opening it draws its session under its heading" \
     [lsearch [drawn] session:harvest-1.jsonl] 2
+# The roots order by the newest session anywhere beneath, whatever order they
+# arrived in: orchard's newest is harvest's.
+check "the roots sort by recency through the fold" \
+    [lmap id [$SL sort_siblings [lreverse [$SL roots]]] { $SL node_field $id key }] \
+    [list $F_ORCHARD $F_ANVIL]
 $SL toggle_folder $F_ORCHARD
 update
 check "shutting the parent takes the nested folder off the view" \

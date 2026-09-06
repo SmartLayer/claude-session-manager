@@ -103,14 +103,13 @@ proc sline {p} {
 }
 proc topkey {} { lindex [$::SL top_visible_node] 1 }
 
-# Stream the sessions in, open the folder, give each a cost under the default
+# Stream the sessions in (the lone root opens on arrival), give each a cost under the default
 # date sort (no resort fires there), then shrink the viewport so the list
 # overflows and scroll has somewhere to go.
 set ::scan_done 0
 $::Scan extend [dict create since 30d]
 after 200 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 update
 for {set i 1} {$i <= 12} {incr i} {
     $SL refresh_cost [lindex $PATHS [expr {$i-1}]] \

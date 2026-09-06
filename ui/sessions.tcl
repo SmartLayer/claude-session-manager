@@ -2196,34 +2196,34 @@ oo::class create ::questlog::ui::SessionList {
     # This is the rule ::questlog::path::container_tree states over a whole
     # corpus at once, applied here one folder at a time as they arrive.
     # Folders arrive in their newest session's order, not top-down, so a new
-    # folder whose directory contains a sibling's takes that sibling beneath it
-    # (adopt_folders); the same step hangs a folder recreated after its last
-    # session left back over the folders it held. cwd is the folder's working
-    # directory when the caller already holds it (a move into an as-yet-unscanned
-    # folder, where ResolveFolder would walk the filesystem and find nothing);
-    # left "" the resolver answers, as browse does.
+    # folder whose directory contains a sibling's takes that sibling beneath
+    # it, and takes the sibling's place among the siblings: the sibling's
+    # newest session is now its own, so the place is its by recency. The same
+    # step hangs a folder recreated after its last session left back over the
+    # folders it held. cwd is the folder's working directory when the caller
+    # already holds it (a move into an as-yet-unscanned folder, where
+    # ResolveFolder would walk the filesystem and find nothing); left "" the
+    # resolver answers, as browse does.
     method ensure_folder {folder {cwd ""}} {
         if {[my has_folder $folder]} return
         if {$cwd eq ""} { set cwd [{*}$ResolveFolder $folder] }
         set dir [expr {$cwd eq "" ? "" : [file normalize $cwd]}]
-        # Browsing opens folders collapsed (an overview of projects); a search
-        # opens them expanded so the matches under each folder are visible. A
-        # collapsed folder draws only its heading - its sessions live in the
-        # model and are rendered lazily on expand, so there are no hidden lines.
-        set expanded [expr {[::questlog::ui::any_criteria $Snapshot] ? 1 : 0}]
-        # The heading is drawn collapsed by default, so flip the open ones and
-        # redraw the marker in place.
         set parent [my folder_parent_for $dir]
-        set fid [my insert $parent folder $folder [dict create dir $dir] \
-                     -pos [list before [my first_session_child $parent]]]
-        if {$expanded} { my node_set $fid expanded 1; my item $fid }
-        my adopt_folders $fid
-        # insert stores a node at its ranked place but draws it at the parent's
-        # append point, below any session drawn there: re-lay the body.
-        if {$parent ne "" && [my node_field $fid rendered] \
-            && [my first_session_child $parent] ne ""} {
-            my collapse_folder [my node_field $parent key]
-            my expand $parent
+        set held [my folders_within $parent $dir]
+        set at [expr {[llength $held] ? [lindex $held 0] : [my first_session_child $parent]}]
+        set fid [my insert $parent folder $folder [dict create dir $dir] -pos [list before $at]]
+        # A search opens every folder, so the matches under each are in view.
+        # Browsing opens the first root alone, the project with the newest
+        # session, and leaves the rest an overview of headings; a folder
+        # arriving over that root takes its place and opens with it, so what
+        # was in view stays in view. The heading is drawn shut, so an open one
+        # redraws its marker.
+        if {[::questlog::ui::any_criteria $Snapshot] || [lindex [my roots] 0] eq $fid} {
+            my node_set $fid expanded 1
+            my item $fid
+        }
+        if {[llength $held]} {
+            my batch { foreach id $held { my move $id $fid } }
         }
     }
 
@@ -2236,6 +2236,19 @@ oo::class create ::questlog::ui::SessionList {
             if {[my node_field $c kind] eq "session"} { return $c }
         }
         return ""
+    }
+
+    # The folders among a parent's children (the roots for parent "") whose
+    # directories lie inside dir, in store order: what a folder arriving at
+    # dir takes beneath it.
+    method folders_within {parent dir} {
+        set out [list]
+        set sibs [expr {$parent eq "" ? [my roots] : [my node_field $parent children]}]
+        foreach id $sibs {
+            if {[my node_field $id kind] eq "folder" \
+                && [my dir_within [my node_pget $id dir] $dir]} { lappend out $id }
+        }
+        return $out
     }
 
     # The folder whose directory most closely contains dir, the parent a folder
@@ -2259,49 +2272,6 @@ oo::class create ::questlog::ui::SessionList {
     method dir_within {dir ancestor} {
         return [expr {$dir ne "" && $ancestor ne "" && $dir ne $ancestor \
                       && [::questlog::scan::in_subtree_of $dir [list $ancestor]]}]
-    }
-
-    # Bring the folders that belong beneath a new folder in under it: those of
-    # its siblings whose directories lie inside its own, each with its subtree.
-    method adopt_folders {fid} {
-        set dir [my node_pget $fid dir]
-        set parent [my node_field $fid parent]
-        set sibs [expr {$parent eq "" ? [my roots] : [my node_field $parent children]}]
-        foreach id $sibs {
-            if {$id eq $fid || [my node_field $id kind] ne "folder"} continue
-            if {[my dir_within [my node_pget $id dir] $dir]} {
-                my reparent_folder $id $fid
-            }
-        }
-    }
-
-    # Hang a folder, with its subtree, under another folder or at the root
-    # (parent ""). It goes in after the last folder among its new siblings, so
-    # the store keeps folders before sessions between rebuilds (kind_rank), and
-    # its row leaves the view first and returns when its new place is due, the
-    # way unhide draws a node back. The base class's move takes only a folder
-    # as the new parent and rebuilds the whole list per call; a folder arriving
-    # over many siblings would pay that once per sibling.
-    method reparent_folder {id newparent} {
-        my detach $id
-        set old [my node_field $id parent]
-        if {$old eq ""} {
-            set Roots [lsearch -all -inline -not -exact $Roots $id]
-        } else {
-            my node_set $old children \
-                [lsearch -all -inline -not -exact [my node_field $old children] $id]
-        }
-        my node_set $id parent $newparent
-        if {$newparent eq ""} {
-            lappend Roots $id
-        } else {
-            set kids [my node_field $newparent children]
-            set at [lsearch -exact $kids [my first_session_child $newparent]]
-            my node_set $newparent children \
-                [linsert $kids [expr {$at < 0 ? "end" : $at}] $id]
-        }
-        if {[my drawable $id]} { my render_subtree $id }
-        my check_invariant reparent_folder
     }
 
     # A folder's label: its directory relative to the folder it sits under, or
@@ -2564,11 +2534,12 @@ oo::class create ::questlog::ui::SessionList {
 
     # What a node adds up to (the base class's fold hooks, node_aggregate):
     # the sessions beneath it counted, with their bytes, spend, machine time
-    # and human time summed. Only a session adds: a subagent's spend is
-    # already rolled into its parent's cost, and a folder is only its
-    # subtree. An unpriced session adds nothing to the figures it lacks.
+    # and human time summed, and the newest of them dated. Only a session
+    # adds: a subagent's spend is already rolled into its parent's cost, and
+    # a folder is only its subtree. An unpriced session adds nothing to the
+    # figures it lacks.
     method aggregate_seed {} {
-        return [dict create count 0 size 0 cost 0.0 duration_secs 0 human_secs 0]
+        return [dict create count 0 size 0 cost 0.0 duration_secs 0 human_secs 0 mtime 0]
     }
     method aggregate_add {acc id} {
         set node [dict get $Nodes $id]
@@ -2576,6 +2547,9 @@ oo::class create ::questlog::ui::SessionList {
         set s [dict get $node payload]
         dict incr acc count
         dict incr acc size [dict getdef $s size 0]
+        if {[dict getdef $s mtime 0] > [dict get $acc mtime]} {
+            dict set acc mtime [dict get $s mtime]
+        }
         set c [dict getdef $s cost ""]
         if {$c ne "" && $c > 0} { dict set acc cost [expr {[dict get $acc cost] + $c}] }
         foreach k {duration_secs human_secs} {
@@ -3424,7 +3398,10 @@ oo::class create ::questlog::ui::SessionList {
     # session of its own is not a row: the folders it still holds step up to
     # its parent (carrying its label in theirs, folder_label) and it is dropped
     # whole; else its heading re-derives. The node must already be off the
-    # folder's children list (deleted or detached) when this runs.
+    # folder's children list (deleted or detached) when this runs. The moves
+    # share one batch, so the step up pays one rebuild, which also ranks the
+    # promoted folders back above their new siblings' sessions; with none
+    # promoted, only the sums above the dropped folder moved.
     method folder_after_leave {fid folder} {
         if {[llength [my folder_session_paths $folder]] > 0} {
             my mark_heading_dirty $folder
@@ -3432,14 +3409,9 @@ oo::class create ::questlog::ui::SessionList {
         }
         set parent [my node_field $fid parent]
         set held [my node_field $fid children]
-        foreach c $held { my reparent_folder $c $parent }
+        my batch { foreach c $held { my move $c $parent } }
         my forget_folder $folder
-        # The promoted folders drew at the tail of their new sibling set, below
-        # its sessions; the rebuild ranks them back above (kind_rank). With
-        # none promoted, only the sums above the dropped folder moved.
-        if {[llength $held]} {
-            my rebuild
-        } elseif {$parent ne ""} {
+        if {![llength $held] && $parent ne ""} {
             my mark_heading_dirty [my node_field $parent key]
         }
     }
@@ -3549,8 +3521,10 @@ oo::class create ::questlog::ui::SessionList {
     # Reorder one kind's run of siblings for a rebuild, keeping every node (the
     # base renders from the durable store and skips the unviewable separately;
     # it ranks the kinds and hands each run here on its own). Folders reorder
-    # by the active sort (cost by the heading's sum, path by label, else
-    # arrival order); sessions by sort_paths; subagents keep arrival order.
+    # by the active sort: a summed column by the heading's sum, date by the
+    # newest session anywhere beneath (so the roots read by recency, as the
+    # sessions of one folder do), path by label, else arrival order; sessions
+    # by sort_paths; subagents keep arrival order.
     method sort_siblings {ids} {
         if {[llength $ids] == 0} { return $ids }
         set bykey [dict create]
@@ -3558,11 +3532,12 @@ oo::class create ::questlog::ui::SessionList {
         set order [dict keys $bykey]
         switch [my node_field [lindex $ids 0] kind] {
             folder {
-                if {$SortKey eq "cost"} {
+                set summed {date mtime size size cost cost duration duration_secs}
+                if {[dict exists $summed $SortKey]} {
                     set valmap [dict create]
                     foreach id $ids {
                         dict set valmap [my node_field $id key] \
-                            [dict get [my node_aggregate $id 1] cost]
+                            [dict get [my node_aggregate $id 1] [dict get $summed $SortKey]]
                     }
                     set order [my sort_folders $order $valmap -real]
                 } elseif {$SortKey eq "path"} {

@@ -95,7 +95,6 @@ set ::scan_done 0
 $::Scan extend [dict create since all]
 after 200 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 update
 
 $SL attr_filter_set bookmarked 1

@@ -69,7 +69,6 @@ proc build_list {w} {
     $::Scan extend [dict create since 30d]
     after 200 [list set ::scan_done 1]
     vwait ::scan_done
-    $sl toggle_folder $::FA
     update
     return $sl
 }

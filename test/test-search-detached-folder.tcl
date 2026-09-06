@@ -173,7 +173,7 @@ check "a subagent match into a detached folder raises nothing" $::bgerr ""
 # The browse stream reaches the same decision by its own door. add_scan_row
 # attaches nothing while a search is on (the result index owns the list then),
 # so this needs a browse snapshot, which clears the store and starts over.
-# Browse folders open collapsed, so the folder is expanded by hand: an expanded
+# Browse opens its first root, and this folder is the only one: an expanded
 # folder emptied by a view floor is the arrangement that detaches one here.
 set FRESH [file join $P1 dddd.jsonl]
 write_session $FRESH {one two three four five six seven eight} $NOW
@@ -183,7 +183,6 @@ update
 $SL add_scan_row [$::Scan scan_path $THIN]
 $SL add_scan_row [$::Scan scan_path $PARENT]
 update
-$SL toggle_folder $FOLDER
 update
 check "the browsed folder is expanded and drawn" \
     [expr {[$SL folder_expanded $FOLDER] && [$SL folder_attached $FOLDER]}] 1

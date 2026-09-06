@@ -83,7 +83,6 @@ set ::scan_done 0
 $::Scan extend [dict create since all min_turns 2]
 after 200 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 update
 check "A rendered (filter off)" [$SL sflag $Ap rendered] 1
 check "B rendered (filter off)" [$SL sflag $Bp rendered] 1

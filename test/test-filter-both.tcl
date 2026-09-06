@@ -177,7 +177,6 @@ set ::scan_done 0
 $::Scan extend [snap]
 after 300 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FOLDER
 $SL reconcile_running $LIVE
 update
 check "A loaded" [$SL has_session $Ap] 1

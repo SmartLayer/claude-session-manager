@@ -90,7 +90,6 @@ set ::scan_done 0
 $::Scan extend [dict create since 30d]
 after 200 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FA
 update
 check "session rendered" [$SL sflag $SP rendered] 1
 
