@@ -2453,30 +2453,38 @@ oo::class create ::questlog::ui::SessionList {
         my check_invariant toggle_folder
     }
 
-    # Open every root one level, in one batch so the reader's scroll
-    # position anchors once for the whole sweep.
+    # Right and Left on the cursor's row open and shut it the way a click on
+    # its marker does: a folder through toggle_folder, a session's subagents
+    # through toggle_subagents, each redrawing the marker and sweeping what the
+    # body left behind. The base class's cursor_open reaches the bare expand
+    # and collapse, which do neither; a subagent row has nothing to open.
+    method cursor_open {open} {
+        set id [my cursor]
+        if {$id eq "" || $open == [my node_field $id expanded]} return
+        switch -- [my node_field $id kind] {
+            folder  { my toggle_folder [my node_field $id key] }
+            session { my toggle_subagents [my node_field $id key] }
+        }
+    }
+
+    # Open every folder at every depth, in one batch so the reader's scroll
+    # position anchors once for the whole sweep. Parents before children: a
+    # nested folder's heading is drawn shut by its parent's expand, then its
+    # own expand lays its body and the redraw turns its marker. A folder
+    # already open is left alone, since expand lays a body it finds laid a
+    # second time.
     method expand_all_folders {} {
         my batch {
-            foreach fid [my roots] {
-                if {[my node_field $fid expanded]} continue
-                my expand $fid
-                my redraw_folder_heading [my node_field $fid key]
+            foreach rid [my roots] {
+                foreach id [list $rid {*}[my descendants $rid]] {
+                    if {[my node_field $id kind] ne "folder" \
+                        || [my node_field $id expanded]} continue
+                    my expand $id
+                    my redraw_folder_heading [my node_field $id key]
+                }
             }
         }
         my check_invariant expand_all_folders
-    }
-
-    # A folder's VISIBLE session paths in the on-screen (sorted) order - the
-    # order a Shift-range walks. Hidden rows
-    # (view-toggled out) are not in it: a range selection or a batch action
-    # must never touch a session the user cannot see. The one place a
-    # folder's display order and visibility compose.
-    method folder_visible_paths {folder} {
-        set shown [list]
-        foreach path [my folder_session_paths $folder] {
-            if {![my sflag $path hidden]} { lappend shown $path }
-        }
-        return [my sort_paths $shown [my folder_session_src $folder]]
     }
 
     # A folder's own session paths, in the order they sit under the folder node;
@@ -2795,7 +2803,7 @@ oo::class create ::questlog::ui::SessionList {
     # The selection is a set of session node ids (SelectedSet, a dict sid->1 in
     # insertion order) with a SelectAnchor sid the Shift-range extends from. A
     # plain click selects one and opens it; Control toggles one (across folders);
-    # Shift selects a contiguous range within one folder. Membership is keyed by
+    # Shift selects the run of drawn rows between two clicks. Membership is keyed by
     # the stable node id, so it survives the frequent re-renders and follows a
     # moved session for free (a move re-parents the node, its id unchanged); the
     # path-facing accessors (is_selected, selection_paths) resolve sid -> key at
@@ -2858,28 +2866,26 @@ oo::class create ::questlog::ui::SessionList {
         set SelectAnchor [my sid $path]
     }
 
-    # Shift click: the contiguous run between the anchor and this row, in the
-    # folder's visible (sorted) order. A range spans one folder only; a Shift
-    # click in another folder re-anchors there instead (a range across folders
-    # is not a meaningful selection). The anchor stays put so dragging the
-    # endpoint grows or shrinks the run from the same origin.
+    # Shift click: the sessions among the drawn rows from the anchor to this
+    # row, whatever folders the run crosses. The headings in the run are not
+    # sessions and stay apart from the selection; a subagent row is its
+    # session's and not selected either. Only drawn rows are in the run, so a
+    # shut folder between the two clicks contributes none of its sessions and
+    # a filtered-out row is never touched: a range selection or a batch action
+    # must never reach a session the reader cannot see. An anchor with no row
+    # (its folder shut since) re-anchors here. The anchor stays put so
+    # dragging the endpoint grows or shrinks the run from the same origin.
     method selection_range {path} {
-        if {$SelectAnchor eq "" || ![dict exists $Nodes $SelectAnchor]} {
-            my selection_set $path
-            return
-        }
-        set anchor_path [my node_field $SelectAnchor key]
-        set folder [my node_pget $SelectAnchor folder]
-        if {![my has_session $path] || [my sget $path folder] ne $folder} {
-            my selection_set $path
-            return
-        }
-        set ordered [my folder_visible_paths $folder]
-        set ia [lsearch -exact $ordered $anchor_path]
-        set ib [lsearch -exact $ordered $path]
+        set rows [my all_rendered_nodes]
+        set ia [expr {$SelectAnchor eq "" ? -1 : [lsearch -exact $rows $SelectAnchor]}]
+        set ib [expr {[my has_session $path] ? [lsearch -exact $rows [my sid $path]] : -1}]
         if {$ia < 0 || $ib < 0} { my selection_set $path; return }
         if {$ia > $ib} { lassign [list $ib $ia] ia ib }
-        my set_selection [lrange $ordered $ia $ib]
+        set run [list]
+        foreach id [lrange $rows $ia $ib] {
+            if {[my node_field $id kind] eq "session"} { lappend run [my node_field $id key] }
+        }
+        my set_selection $run
     }
 
     # Opening a session lands at its start unless the caller names a line: the

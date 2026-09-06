@@ -3,17 +3,20 @@
 #
 # The list holds a set of selected sessions (SelectedSet) with an anchor, keyed
 # by the stable node id (sid). A plain click selects one; Control toggles one
-# across folders; Shift selects a contiguous range within one folder. Because the
-# id does not change, the set survives a move for free (the node re-parents) and
-# a delete drops it (forget_session purges by id). This drives the model directly
-# over a two-folder sandbox and asserts each gesture
-# and each survival path.
+# across folders; Shift selects the sessions among the drawn rows between the
+# anchor and the click, whatever folders the run crosses: the headings in it
+# are held apart, and a shut folder in it contributes none of its sessions,
+# since nothing undrawn enters a selection. Because the id does not change,
+# the set survives a move for free (the node re-parents) and a delete drops it
+# (forget_session purges by id). This drives the model directly over a
+# three-folder sandbox and asserts each gesture and each survival path.
 
 package require Tcl 9
 package require Tk
 
 set SAND [file join [pwd] _selection_sandbox]
 set FA "-tmp-sel-a"
+set FM "-tmp-sel-m"
 set FB "-tmp-sel-b"
 
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
@@ -31,8 +34,10 @@ foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
 
 ::questlog::path::_real_file delete -force $SAND
 set DIRA [file join $SAND .claude projects $FA]
+set DIRM [file join $SAND .claude projects $FM]
 set DIRB [file join $SAND .claude projects $FB]
 ::questlog::path::_real_file mkdir $DIRA
+::questlog::path::_real_file mkdir $DIRM
 ::questlog::path::_real_file mkdir $DIRB
 set ::env(HOME) $SAND
 unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
@@ -48,29 +53,25 @@ proc write_session {path ts} {
 }
 
 # Folder A: a01 newest .. a03 oldest, so date-descending display order is
-# a01, a02, a03. Folder B: b01, b02, older still. Session moments are offsets
-# from now, not calendar dates: the scan below filters with `since 30d`, and a
-# fixed date silently ages out of that window and starves the sandbox (it
-# happened; the streamed-in counts collapsed to 1 and 0).
+# a01, a02, a03. Folder M: m01, older. Folder B: b01, b02, older still, so the
+# roots read A, M, B by recency. Session moments are offsets from now, not
+# calendar dates: the scan below filters with `since 30d`, and a fixed date
+# silently ages out of that window and starves the sandbox (it happened; the
+# streamed-in counts collapsed to 1 and 0).
 proc session_moment {days_ago} { return [expr {[clock seconds] - $days_ago*24*3600}] }
-set A {}
-for {set i 1} {$i <= 3} {incr i} {
-    set p [file join $DIRA [format a%02d $i].jsonl]
-    set when [session_moment $i]
+proc write_at {dir name days_ago} {
+    set p [file join $dir $name.jsonl]
+    set when [session_moment $days_ago]
     write_session $p [clock format $when -format "%Y-%m-%dT%H:%M:%S" -gmt 1]
     file mtime $p $when
-    lappend A $p
+    return $p
 }
-set B {}
-for {set i 1} {$i <= 2} {incr i} {
-    set p [file join $DIRB [format b%02d $i].jsonl]
-    set when [session_moment [expr {4 + $i}]]
-    write_session $p [clock format $when -format "%Y-%m-%dT%H:%M:%S" -gmt 1]
-    file mtime $p $when
-    lappend B $p
-}
-lassign $A a01 a02 a03
-lassign $B b01 b02
+set a01 [write_at $DIRA a01 1]
+set a02 [write_at $DIRA a02 2]
+set a03 [write_at $DIRA a03 3]
+set m01 [write_at $DIRM m01 4]
+set b01 [write_at $DIRB b01 5]
+set b02 [write_at $DIRB b02 6]
 
 set SL ""
 set ::Scan [::questlog::Scan new [list apply {{r} { $::SL on_scan_row $r }}] noop]
@@ -102,15 +103,15 @@ set ::scan_done 0
 $::Scan extend [dict create since 30d]
 after 200 [list set ::scan_done 1]
 vwait ::scan_done
-$SL toggle_folder $FA
+# The first root opened on arrival; the other two are opened here.
+$SL toggle_folder $FM
 $SL toggle_folder $FB
 update
 
-check "both folders streamed in" \
-    [list [llength [$SL folder_session_paths $FA]] [llength [$SL folder_session_paths $FB]]] \
-    {3 2}
-check "folder_visible_paths is date-descending order" \
-    [$SL folder_visible_paths $FA] [list $a01 $a02 $a03]
+check "the three folders streamed in" \
+    [lmap f [list $FA $FM $FB] { llength [$SL folder_session_paths $f] }] {3 1 2}
+check "every row is drawn" \
+    [lmap p [list $a01 $a02 $a03 $m01 $b01 $b02] { $SL sflag $p rendered }] {1 1 1 1 1 1}
 
 # ---- folder selection: fid-keyed, exclusive with session selection ------
 # A folder heading is selectable too, but held apart from the session set: the
@@ -143,19 +144,40 @@ check "ctrl-add across folders (safe)" [sel] [lsort [list $a01 $a02 $b01]]
 $SL selection_toggle $a01
 check "ctrl-remove drops just that one" [sel] [lsort [list $a02 $b01]]
 
-# ---- Shift range, confined to one folder ---------------------------------
+# ---- Shift range: the drawn rows between the two clicks -------------------
 $SL selection_set $a01
 $SL selection_range $a03
-check "shift-range covers the folder slice anchor..target" [sel] [lsort [list $a01 $a02 $a03]]
+check "shift-range covers the run anchor..target in drawn order" [sel] [lsort [list $a01 $a02 $a03]]
 $SL selection_set $a03
 $SL selection_range $a01
 check "shift-range is order-independent (target above anchor)" [sel] [lsort [list $a01 $a02 $a03]]
 
-# A shift-click in another folder than the anchor re-anchors there instead of
-# selecting an undefined cross-folder range.
-$SL selection_set $a01
-$SL selection_range $b02
-check "cross-folder shift re-anchors to the target alone" [sel] [list $b02]
+# The run crosses folders: the sessions of every folder it passes through are
+# in, the headings it passes are not.
+$SL selection_set $a03
+$SL selection_range $b01
+check "a cross-folder shift takes the drawn sessions between" [sel] [lsort [list $a03 $m01 $b01]]
+check "the headings in the run stay apart from the selection" \
+    [list [$SL is_folder_selected $FM] [$SL selection_count]] {0 3}
+
+# A shut folder in the run contributes none of its sessions: nothing undrawn
+# enters a selection.
+$SL toggle_folder $FM
+update
+$SL selection_set $a03
+$SL selection_range $b01
+check "a shut folder between the clicks contributes nothing" [sel] [lsort [list $a03 $b01]]
+
+# An anchor whose row has gone (its folder shut since) re-anchors at the click.
+$SL toggle_folder $FM
+update
+$SL selection_set $m01
+$SL toggle_folder $FM
+update
+$SL selection_range $b01
+check "an anchor with no row re-anchors at the target alone" [sel] [list $b01]
+$SL toggle_folder $FM
+update
 
 # ---- selection survives a move (the set is sid-keyed; the move keeps the id) --
 $SL selection_set $a02
