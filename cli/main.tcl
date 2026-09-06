@@ -870,8 +870,12 @@ proc ::questlog::cli::main::run {q} {
             "subagents" $subagents_list]
 
         if {![dict exists $output_folders $folder]} {
+            # The published contract: the directory to cd into, empty when it
+            # no longer exists (the resolver still names a gone one by its path).
+            set project_path [$scan resolve_folder $folder]
+            if {![file isdirectory $project_path]} { set project_path "" }
             dict set output_folders $folder [dict create \
-                "project_path" [$scan resolve_folder $folder] \
+                "project_path" $project_path \
                 "sessions" {}]
         }
         set folder_data [dict get $output_folders $folder]

@@ -243,10 +243,10 @@ proc ::questlog::scan::folder_subtree_candidate {fname subtree_list} {
 # even though its recorded cwd is in bounds, and one moved into an in-bounds
 # folder is in - the move feature files sessions, and filing is what the bounds
 # read. Fallbacks, each naming its fault:
-#   - folder_cwd "" or absent (the project directory no longer exists, or the
-#     encoded basename is ambiguous, so residence is unknowable): the recorded
-#     cwd_hint decides - this keeps sessions of a deleted repo findable by
-#     their old path.
+#   - folder_cwd "" or absent (the encoded basename is ambiguous and no
+#     transcript names it, so residence is unknowable): the recorded cwd_hint
+#     decides. A deleted repo's folder resolves to its recorded path, so its
+#     sessions stay findable by that path through the field itself.
 #   - cwd_hint also empty (a transcript that never recorded a cwd): the
 #     encoded folder name against the subtree dirs, the last honest evidence.
 proc ::questlog::scan::row_subtree_match {row subtree_list} {
@@ -716,11 +716,11 @@ oo::class create ::questlog::Scan {
         # (encode_cwd(cwd_hint) == folder); for a session moved into this
         # folder the two disagree and trusting cwd_hint would label the
         # folder with the source project's name. Seed the Folders cache
-        # only when the hint is self-consistent AND still points at an
-        # extant directory, so the cache never holds a fictional path.
+        # only when the hint is self-consistent, so the cache never holds a
+        # fictional path. A self-consistent hint whose directory is gone is
+        # still the folder's path, the one that says where it hung.
         if {$cwd ne "" && ![dict exists $Folders $folder]
-            && [::questlog::path::encode_cwd $cwd] eq $folder
-            && [file isdirectory $cwd]} {
+            && [::questlog::path::encode_cwd $cwd] eq $folder} {
             dict set Folders $folder $cwd
         }
         if {$OnRow ne ""} { {*}$OnRow $row }
@@ -728,9 +728,10 @@ oo::class create ::questlog::Scan {
 
     # Stamp a row with folder_cwd: the directory its project folder resolves
     # to, normalized so a symlinked recorded spelling compares equal to a
-    # canon_dir-normalized subtree bound, or "" when the folder is
-    # unresolvable (its directory is gone, or the encoded basename is
-    # ambiguous). row_subtree_match reads the field as the residence
+    # canon_dir-normalized subtree bound (a directory that is gone normalizes
+    # as far as its living prefix reaches), or "" when the folder is
+    # unresolvable (the encoded basename is ambiguous and no transcript names
+    # it). row_subtree_match reads the field as the residence
     # authority; the stamping lives here because Scan owns the resolver and
     # its cache, which keeps ::questlog::scan pure over its dicts. A ""
     # stamp is not re-tried until the file is rescanned; resolve_folder
@@ -746,30 +747,33 @@ oo::class create ::questlog::Scan {
 
     # The single canonical folder-basename -> cwd resolver. Every label
     # and every command that needs the project directory goes through
-    # here or through folder_cwd below. Returns an extant absolute
-    # directory path, or "" when the folder cannot be resolved (its
-    # directory is gone, or the basename is genuinely ambiguous). Never
+    # here or through folder_cwd below. Returns the folder's absolute
+    # directory path: an extant one, or the path its transcripts record when
+    # that directory is gone, so the session list can hang the folder under
+    # its nearest living ancestor and a subtree bound over that ancestor still
+    # admits its sessions; a caller that needs the directory itself asks
+    # `file isdirectory`. Returns "" when the folder cannot be placed (the
+    # basename is genuinely ambiguous and no transcript names it). Never
     # returns a fictional path.
     #
     #   1. Folders cache - already resolved this process.
     #   2. NegFolders memo - already failed this pass; "" without re-peeking.
-    #   3. peek_folder_cwd - the cwd recorded inside an honest jsonl,
-    #      trusted only if it still names a real directory. This step
-    #      READS TRANSCRIPTS, which is why it is a scan-path step and why
+    #   3. peek_folder_cwd - the cwd recorded inside an honest jsonl. This
+    #      step READS TRANSCRIPTS, which is why it is a scan-path step and why
     #      resolve_folder itself must never be called from a UI path
     #      (call folder_cwd instead).
     #   4. folder_cwd - the Folders cache and the filesystem walk.
     #   5. "" - unresolvable. Memoised in NegFolders for the rest of this pass,
-    #      so a folder of N sessions whose directory is gone, or whose
-    #      transcripts all point elsewhere, pays one peek per pass rather than
-    #      one per row; the memo is dropped at the next pass boundary, so a
-    #      directory created or restored later still gets a fresh chance.
+    #      so a folder of N sessions whose transcripts all point elsewhere pays
+    #      one peek per pass rather than one per row; the memo is dropped at
+    #      the next pass boundary, so a directory created later still gets a
+    #      fresh chance.
     method resolve_folder {folder} {
         if {[dict exists $Folders $folder]} { return [dict get $Folders $folder] }
         if {[dict exists $NegFolders $folder]} { return "" }
         if {$Peek} {
             set cwd [my peek_folder_cwd $folder]
-            if {$cwd ne "" && [file isdirectory $cwd]} {
+            if {$cwd ne ""} {
                 dict set Folders $folder $cwd
                 return $cwd
             }

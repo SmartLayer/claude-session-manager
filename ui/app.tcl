@@ -489,7 +489,8 @@ proc ::questlog::ui::app::on_widen {criterion} {
 # folder's project cwd into the toolbar's subtree facet and publish. subtree is
 # one of the keys bounds_equal reads, so the new snapshot forces the full rebuild
 # in on_filter rather than the view-only fast path. A folder whose directory is
-# gone resolves to "" and bounds nothing.
+# gone bounds by the path it had (its sessions are stamped with it); one the
+# resolver cannot place resolves to "" and bounds nothing.
 proc ::questlog::ui::app::on_folder_bound {folder} {
     variable Toolbar
     set cwd [folder_cwd $folder]
@@ -1024,13 +1025,13 @@ proc ::questlog::ui::app::live_move_names {paths} {
 }
 
 # Drop-move resolves the dropped-on folder basename to its real cwd via the
-# canonical resolver. A drop onto a folder that cannot be resolved (its
-# underlying project directory is gone or ambiguous) is refused rather than
-# silently moving into an orphan.
+# canonical resolver. A drop onto a folder without a directory to move into
+# (its project directory is gone, or its basename ambiguous) is refused rather
+# than silently moving into an orphan.
 proc ::questlog::ui::app::on_drop_move {paths target_folder_basename} {
     variable Scan
     set dst_cwd [$Scan resolve_folder $target_folder_basename]
-    if {$dst_cwd eq ""} {
+    if {![file isdirectory $dst_cwd]} {
         tk_messageBox -icon error -title "Move session" \
             -message "Cannot resolve destination folder: $target_folder_basename"
         return

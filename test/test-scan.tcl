@@ -106,6 +106,23 @@ check resolve_absent_dir "" [$s resolve_folder "-no-such-folder-xyz"]
 ::questlog::path::_real_file delete -force $realcwd
 ::questlog::path::_real_file delete -force [file join /tmp/questlog-test-projects $rf]
 
+# A folder whose directory is gone still resolves, to the path its transcript
+# records: the session list hangs it under that path's nearest living ancestor
+# and a subtree bound over the ancestor admits its sessions. The path never
+# existed here, so only the transcript can name it; the peeking resolver reads
+# it, and the walk-only one (folder_cwd, cold) has nothing to say.
+set gonecwd /tmp/questlog-test-realcwd/pruned/spring
+set gf [::questlog::path::encode_cwd $gonecwd]
+::questlog::path::_real_file mkdir [file join /tmp/questlog-test-projects $gf]
+set fh [open [file join /tmp/questlog-test-projects $gf gone-1.jsonl] w]
+puts $fh "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"a\"},\"cwd\":\"$gonecwd\"}"
+close $fh
+set sg [::questlog::Scan new "" ""]
+check walk_cannot_name_a_gone_dir "" [$sg folder_cwd $gf]
+check resolve_gone_dir_to_its_recorded_path $gonecwd [$s resolve_folder $gf]
+$sg destroy
+::questlog::path::_real_file delete -force [file join /tmp/questlog-test-projects $gf]
+
 # ---- folder_cwd: the resolver that opens nothing ---------------------
 #
 # The UI is wired to folder_cwd, not to resolve_folder, and the whole line
