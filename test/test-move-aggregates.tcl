@@ -106,7 +106,7 @@ $::Scan extend [dict create since all]
 after 300 [list set ::scan_done 1]
 vwait ::scan_done
 update
-proc ftot {f k} { global SL; return [dict get [$SL folder_totals $f] $k] }
+proc ftot {f k} { global SL; return [dict get [$SL node_aggregate [$SL fid $f]] $k] }
 check "A holds two sessions" [ftot $FA count] 2
 check "B holds one session"  [ftot $FB count] 1
 check "store clean before any move" [$SL audit] {}

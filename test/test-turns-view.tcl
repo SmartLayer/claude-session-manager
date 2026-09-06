@@ -1,7 +1,7 @@
 #!/usr/bin/env wish9.0
 # The toolbar's turns floor is a view filter: a session below it stays in the
-# store, priced and counted in the folder heading and the grand total, and
-# only its rendering is suppressed. Moving the floor re-derives the view over
+# store, priced and counted in the grand total, and only its rendering is
+# suppressed, the heading narrowing to what it shows. Moving the floor re-derives the view over
 # the loaded rows in place - no rescan, no re-read. (The min_turns snapshot
 # key stays a row_in_bounds bound; test-scan.tcl guards that side.)
 
@@ -93,12 +93,14 @@ check "both sessions are in the store" \
     [list [$SL has_session $ONE] [$SL has_session $THREE]] {1 1}
 check "the one-turn session is hidden" [$SL sflag $ONE hidden] 1
 check "the three-turn session shows" [$SL sflag $THREE hidden] 0
-check "visible count excludes the hidden row" [$SL folder_visible_count $FOLDER] 1
+check "visible count excludes the hidden row" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 1
 
 set whole [expr {[$SL sget $ONE cost] + [$SL sget $THREE cost]}]
-check "folder cost is the whole sum, hidden included" \
-    [dict get [$SL folder_totals $FOLDER] cost] $whole
-check "the grand total is the whole sum too" [$SL total_cost] $whole
+check "the store's folder sum is whole, hidden included" \
+    [dict get [$SL node_aggregate [$SL fid $FOLDER]] cost] $whole
+check "the heading's sum is what it shows" \
+    [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] cost] [$SL sget $THREE cost]
+check "the grand total is the whole sum" [$SL total_cost] $whole
 
 # Dropping the floor reveals the row from the store: no rescan, no file read.
 set before $::scanpath_calls
@@ -106,7 +108,7 @@ $SL set_turns_view 1
 update
 check "set_turns_view 1 reveals the one-turn row" [$SL sflag $ONE hidden] 0
 check "the reveal reads no file" $::scanpath_calls $before
-check "visible count recovers" [$SL folder_visible_count $FOLDER] 2
+check "visible count recovers" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 2
 
 # Raising it again hides without forgetting: the row and its cost stay.
 $SL set_turns_view 2

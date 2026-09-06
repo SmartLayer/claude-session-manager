@@ -121,7 +121,7 @@ check "parent human time stays own, subagent human time not summed" [dict get $s
 check "derived total cost summed up" [$SL total_cost] 0.00285
 
 # Check folder cost
-check "folder cost summed up" [dict get [$SL folder_totals $FOLDER] cost] 0.00285
+check "folder cost summed up" [dict get [$SL node_aggregate [$SL fid $FOLDER]] cost] 0.00285
 
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]

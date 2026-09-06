@@ -216,7 +216,7 @@ settle
 check "both: A hidden (not running)"     [$SL sflag $Ap rendered] 0
 check "both: B hidden (not bookmarked)"  [$SL sflag $Bp rendered] 0
 check "both: C shown (running and bookmarked)" [$SL sflag $Cp rendered] 1
-check "both: one row shows"              [$SL folder_visible_count $FOLDER] 1
+check "both: one row shows"              [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 1
 check "both: the strip counts the intersection, not either filter" \
     [strip] "Running and Bookmarked · showing 1 of 2 · 1 outside your criteria"
 check "both: the banner names the cut member and says both filters" \
@@ -297,7 +297,7 @@ settle
 check "the carried label shut off: it hides the rows Running admits" \
     [$SL sflag $Bp rendered] 0
 check "the carried label shut off: no row is left showing" \
-    [$SL folder_visible_count $FOLDER] 0
+    [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 0
 check "the carried label shut off: the strip still names Running, counts Running's members" \
     [strip] "Running · showing 0 of 4 · 1 outside your criteria"
 check "the carried label shut off: the cut is Running's, the banner says only running" \
@@ -315,7 +315,7 @@ check "the model filter loaded nothing" \
 $SL attr_filter_set running 0
 push
 settle
-check "the model filter alone hides every row" [$SL folder_visible_count $FOLDER] 0
+check "the model filter alone hides every row" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 0
 check "the model filter alone says nothing in the strip" [strip] ""
 check "the model filter alone raises no cut banner"      [banner] ""
 

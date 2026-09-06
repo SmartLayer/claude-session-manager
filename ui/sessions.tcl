@@ -47,10 +47,11 @@ proc ::questlog::ui::session_columns {} {
 # folder whose directory most closely contains its own (ensure_folder), so a
 # project's subdirectories nest under it, a corpus of unrelated directories is
 # a row of roots, and a folder whose directory is gone hangs under its nearest
-# living ancestor. SessionList supplies the content and ordering through the
-# base class's hooks (column_spec, render_subject, cell_values, cell_tag,
-# sort_key, kind_rank) and owns the session-specific interaction, cost
-# aggregation, menus, rename, search snippets, and reconcile.
+# living ancestor. SessionList supplies the content, the ordering and what a
+# heading adds up to through the base class's hooks (column_spec,
+# render_subject, cell_values, cell_tag, sort_key, kind_rank, aggregate_seed
+# and aggregate_add) and owns the session-specific interaction, a session's
+# subagent cost roll-up, menus, rename, search snippets, and reconcile.
 #
 # Layout, top to bottom, as tagged regions in the one text widget:
 #   folder heading   - the project label, a drop target for moves
@@ -786,9 +787,9 @@ oo::class create ::questlog::ui::SessionList {
 
     # The turns floor moved with everything else equal: re-derive every hidden
     # flag over the loaded rows and rebuild, no rescan. The floor is a view
-    # key (ui/toolbar.tcl): a below-floor session stays in the store, priced
-    # and counted, and only its rendering is suppressed - which is what keeps
-    # the folder sums and the grand total true sums over the window.
+    # key (ui/toolbar.tcl): a below-floor session stays in the store, priced,
+    # and only its rendering is suppressed, so the grand total still sums the
+    # whole window while a heading's figures narrow to what it shows.
     method set_turns_view {n} {
         set TurnsView $n
         my apply_attr_filters
@@ -1013,14 +1014,18 @@ oo::class create ::questlog::ui::SessionList {
         my schedule_resort
     }
 
-    # A folder heading whose aggregates moved: redraw now when unbatched,
-    # once per flush when batched (the per-row redraw was O(rows x folder
-    # size); this is O(flushes x touched folders)).
+    # A folder heading whose sums moved, and every heading above it, since a
+    # heading sums its whole subtree: redrawn now when unbatched, once per
+    # flush when batched (the per-row redraw was O(rows x folder size); this
+    # is O(flushes x touched folders)).
     method mark_heading_dirty {folder} {
-        if {$InBatch} {
-            dict set DirtyHeadings $folder 1
-        } else {
-            my redraw_folder_heading $folder
+        set fid [my fid $folder]
+        foreach id [list $fid {*}[my ancestors $fid]] {
+            if {$InBatch} {
+                dict set DirtyHeadings [my node_field $id key] 1
+            } else {
+                my redraw_folder_heading [my node_field $id key]
+            }
         }
     }
 
@@ -1943,23 +1948,18 @@ oo::class create ::questlog::ui::SessionList {
 
     # The metadata cells the base class lays for a node, as ordered {col value}
     # pairs (a base-class hook). A session or subagent row carries every column.
-    # A folder
-    # heading carries no per-row date/turns/duration/actions: only an empty date
-    # cell (so its size/cost still tab under the rows' size/cost columns) and the
-    # size and cost aggregates.
+    # A folder heading carries the sums of what it shows, formatted as the rows
+    # format their own, through the date cell (empty, so its sums tab under
+    # the rows' columns) to A/H; a sum with nothing in it is blank rather
+    # than "$0.00" or "00:00".
     method cell_values {node} {
         set kind [my node_field $node kind]
         if {$kind eq "folder"} {
-            set tot [my folder_totals [my node_field $node key] 1]
-            set size_sum ""
-            set cost_sum ""
-            if {[dict get $tot count] > 0} {
-                set size_sum [my fmt_size [dict get $tot size]]
-                if {[dict get $tot cost] > 0} {
-                    set cost_sum [::questlog::cost::format_usd [dict get $tot cost]]
-                }
-            }
-            return [list [list date ""] [list size $size_sum] [list cost $cost_sum]]
+            set agg [my node_aggregate $node 1]
+            set cells [my meta_cells [dict filter $agg script {k v} {expr {$v > 0}}]]
+            return [lmap col {date size cost turns duration ah} {
+                list $col [dict get $cells $col]
+            }]
         }
         set cells [my meta_cells [my node_payload $node]]
         set out [list]
@@ -1974,25 +1974,18 @@ oo::class create ::questlog::ui::SessionList {
     # cell is non-empty. The cost cell takes a tier colour (amber from 10c, brick
     # red from $1; below that the muted meta grey shows through); the actions cell
     # is marked so a click on it is told apart from the row, and brightens while
-    # the row is selected. Folder aggregates are bold; their cost also takes the
+    # the row is selected. A heading's sums are bold; the cost also takes the
     # tier colour, so the project that ate the most reads bold red.
     method cell_tag {node col} {
         set kind [my node_field $node kind]
         if {$kind eq "folder"} {
-            switch -- $col {
-                size { return {meta foldagg} }
-                cost {
-                    set fc [dict get [my folder_totals [my node_field $node key] 1] cost]
-                    set ctag meta
-                    if {$fc >= 1.0} {
-                        set ctag cost-outlier
-                    } elseif {$fc >= 0.10} {
-                        set ctag cost-mid
-                    }
-                    return [list $ctag foldagg]
-                }
-                default { return {} }
+            if {$col ni {size cost duration ah}} { return {} }
+            set ctag meta
+            if {$col eq "cost"} {
+                set fc [dict get [my node_aggregate $node 1] cost]
+                if {$fc >= 1.0} { set ctag cost-outlier } elseif {$fc >= 0.10} { set ctag cost-mid }
             }
+            return [list $ctag foldagg]
         }
         switch -- $col {
             cost {
@@ -2327,19 +2320,19 @@ oo::class create ::questlog::ui::SessionList {
     }
 
     # The folder heading subject: the marker, the (truncated) project label, the
-    # gone glyph when its directory no longer exists, and a bare "(N)" session
-    # count - "(N of M)" when a list filter hides some of the folder's rows, M
-    # the model count. The folder's size and cost aggregates are laid by
-    # the base class as cells (cell_values) under the rows' size/cost columns, with an
-    # empty date cell so the double tab opens straight into the size column; their
-    # bold/tier tags come from cell_tag. The subject tags only its leading marker
-    # (the foldchevron range), so a Button-1 on the marker can be told from one on
-    # the label: the marker toggles expand/collapse, the label selects the folder.
+    # gone glyph when its directory no longer exists, and a bare "(N)" count of
+    # the sessions beneath it, nested folders included - "(N of M)" when a list
+    # filter hides some of them, M the store's count. The folder's size, cost
+    # and time sums are laid by the base class as cells (cell_values) under the
+    # rows' columns, with an empty date cell so the double tab opens straight
+    # into the size column; their bold/tier tags come from cell_tag. The
+    # subject tags only its leading marker (the foldchevron range), so a
+    # Button-1 on the marker can be told from one on the label: the marker
+    # toggles expand/collapse, the label selects the folder.
     method folder_subject {node} {
         set marker [expr {[my node_field $node expanded] ? "▾" : "▸"}]
-        set folder [my node_field $node key]
-        set n [my folder_visible_count $folder]
-        set total [dict get [my folder_totals $folder] count]
+        set n [dict get [my node_aggregate $node 1] count]
+        set total [expr {[my any_view_toggle] ? [dict get [my node_aggregate $node] count] : $n}]
         set count_str [expr {[my folder_gone $node] ? " $::questlog::ui::GLYPH_GONE" : ""}]
         if {$n > 0} {
             append count_str [expr {$total > $n ? " ($n of $total)" : " ($n)"}]
@@ -2378,7 +2371,7 @@ oo::class create ::questlog::ui::SessionList {
         # highlight; re-add it from membership, the way redraw_header does. The
         # membership is model state and outlives a rebuild that detached the
         # folder, so the heading has to be drawn before its start mark is read:
-        # relayout_content redraws every root's heading on a resize, detached
+        # relayout_content redraws every drawn heading on a resize, detached
         # ones included.
         if {[my folder_attached $folder] && [my is_folder_selected $folder]} {
             set fm [my node_field [my fid $folder] start]
@@ -2536,10 +2529,9 @@ oo::class create ::questlog::ui::SessionList {
     }
 
     # True while a filter is narrowing the view, so some loaded sessions may be
-    # hidden. When none is, the model count is exact and the per-session walk
-    # below is skipped. Every filter counts, the model filter included: it hides
-    # loaded rows exactly as the other two do, and a folder whose rows it all
-    # hides must not go on reporting them.
+    # hidden. Every filter counts, the model filter included: it hides loaded
+    # rows exactly as the other two do, and a folder whose rows it all hides
+    # must not go on reporting them.
     method any_view_toggle {} {
         if {$TurnsView > 1} { return 1 }
         return [expr {[llength [::questlog::listfilter::active_filters [my attr_filter_all]]] > 0}]
@@ -2548,10 +2540,10 @@ oo::class create ::questlog::ui::SessionList {
     # A row that arrives while a filter is on lands hidden, and the folder created
     # for it draws a heading with nothing under it: rows stream in one at a time
     # (the scan, the search) and no step in that path re-derives the view, so the
-    # heading stands over an empty folder claiming a size and a cost. rebuild is
-    # the pass that does re-derive it (hidden-aware, dropping a folder with no
-    # shown row), so ask for one - debounced, so a flood of streamed rows costs one
-    # rebuild rather than one per row.
+    # heading stands over an empty folder. rebuild is the pass that does
+    # re-derive it (hidden-aware, dropping a folder with no shown row), so ask
+    # for one - debounced, so a flood of streamed rows costs one rebuild rather
+    # than one per row.
     method schedule_view_rebuild {} {
         if {![my any_view_toggle]} return
         if {$ViewRebuildTimer ne ""} { my forget $ViewRebuildTimer }
@@ -2566,37 +2558,27 @@ oo::class create ::questlog::ui::SessionList {
         my refresh_filter_note
     }
 
-    # The number of a folder's sessions that are currently shown (not hidden by
-    # a toggle). This is the count the heading displays and the value that, at
-    # zero, detaches the folder from the view.
-    method folder_visible_count {folder} {
-        if {![my any_view_toggle]} {
-            return [llength [my folder_session_paths $folder]]
-        }
-        set n 0
-        foreach path [my folder_session_paths $folder] {
-            if {![my sflag $path hidden]} { incr n }
-        }
-        return $n
+    # What a node adds up to (the base class's fold hooks, node_aggregate):
+    # the sessions beneath it counted, with their bytes, spend, machine time
+    # and human time summed. Only a session adds: a subagent's spend is
+    # already rolled into its parent's cost, and a folder is only its
+    # subtree. An unpriced session adds nothing to the figures it lacks.
+    method aggregate_seed {} {
+        return [dict create count 0 size 0 cost 0.0 duration_secs 0 human_secs 0]
     }
-
-    # A folder's count/size/cost, summed from its own sessions' payloads at ask
-    # time (issue #60), the folders beneath it not counted: nothing is stored,
-    # so a move, forget or freshen cannot leave a heading's totals behind. shown=1 narrows the COUNT to the
-    # rows no list-view toggle is hiding; money and bytes always sum every
-    # stored member, hidden included, so the heading answers what the project
-    # spent in the window whatever the view is showing.
-    method folder_totals {folder {shown 0}} {
-        set n 0; set sz 0; set cst 0.0
-        foreach sid [my node_field [my fid $folder] children] {
-            if {[my node_field $sid kind] ne "session"} continue
-            set sz [expr {$sz + [my node_pget $sid size 0]}]
-            set c [my node_pget $sid cost]
-            if {$c ne "" && $c > 0} { set cst [expr {$cst + $c}] }
-            if {$shown && [my node_field $sid hidden]} continue
-            incr n
+    method aggregate_add {acc id} {
+        set node [dict get $Nodes $id]
+        if {[dict get $node kind] ne "session"} { return $acc }
+        set s [dict get $node payload]
+        dict incr acc count
+        dict incr acc size [dict getdef $s size 0]
+        set c [dict getdef $s cost ""]
+        if {$c ne "" && $c > 0} { dict set acc cost [expr {[dict get $acc cost] + $c}] }
+        foreach k {duration_secs human_secs} {
+            set v [dict getdef $s $k ""]
+            if {$v ne ""} { dict incr acc $k $v }
         }
-        return [dict create count $n size $sz cost $cst]
+        return $acc
     }
 
     # Drop the per-snippet / per-child-snippet tags ("n#" / "c#") left empty by a
@@ -3281,7 +3263,7 @@ oo::class create ::questlog::ui::SessionList {
         # another project must not surface under a folder bound. The recency bound
         # is the only thing a running session bypasses, not the folder bound.
         set subtree [dict getdef $Snapshot subtree {}]
-        set before [my session_count]
+        set before [llength [my all_session_paths]]
 
         $Text configure -state normal
         my anchor_save
@@ -3382,7 +3364,7 @@ oo::class create ::questlog::ui::SessionList {
             $Text configure -state disabled
             # Surfacing or dropping running sessions changes the set, so a
             # non-default sort needs a re-render to reseat them.
-            if {[my session_count] != $before} { my schedule_resort }
+            if {[llength [my all_session_paths]] != $before} { my schedule_resort }
         }
         # A change in the running set changes the `running` attribute's value on
         # the rows that flipped, so when the base class's running filter is on its
@@ -3400,14 +3382,6 @@ oo::class create ::questlog::ui::SessionList {
         # that routes through here.
         my refresh_filter_note
         my check_invariant reconcile_running
-    }
-
-    # The number of session nodes in the model (subagents excluded), so a
-    # reconcile pass can tell whether the displayed session set changed.
-    method session_count {} {
-        set n 0
-        foreach fid $Roots { incr n [llength [my node_field $fid children]] }
-        return $n
     }
 
     method reconcile_one {path} {
@@ -3431,12 +3405,11 @@ oo::class create ::questlog::ui::SessionList {
         }
     }
 
+    # Every session in the store (subagents excluded), at any depth.
     method all_session_paths {} {
         set out [list]
-        foreach fid $Roots {
-            foreach sid [my node_field $fid children] {
-                lappend out [my node_field $sid key]
-            }
+        foreach id [my all_node_ids] {
+            if {[my node_field $id kind] eq "session"} { lappend out [my node_field $id key] }
         }
         return $out
     }
@@ -3450,7 +3423,7 @@ oo::class create ::questlog::ui::SessionList {
     # folder's children list (deleted or detached) when this runs.
     method folder_after_leave {fid folder} {
         if {[llength [my folder_session_paths $folder]] > 0} {
-            my redraw_folder_heading $folder
+            my mark_heading_dirty $folder
             return
         }
         set parent [my node_field $fid parent]
@@ -3458,8 +3431,13 @@ oo::class create ::questlog::ui::SessionList {
         foreach c $held { my reparent_folder $c $parent }
         my forget_folder $folder
         # The promoted folders drew at the tail of their new sibling set, below
-        # its sessions; the rebuild ranks them back above (kind_rank).
-        if {[llength $held]} { my rebuild }
+        # its sessions; the rebuild ranks them back above (kind_rank). With
+        # none promoted, only the sums above the dropped folder moved.
+        if {[llength $held]} {
+            my rebuild
+        } elseif {$parent ne ""} {
+            my mark_heading_dirty [my node_field $parent key]
+        }
     }
 
     method forget_session {path} {
@@ -3567,8 +3545,8 @@ oo::class create ::questlog::ui::SessionList {
     # Reorder one kind's run of siblings for a rebuild, keeping every node (the
     # base renders from the durable store and skips the unviewable separately;
     # it ranks the kinds and hands each run here on its own). Folders reorder
-    # by the active sort (cost by aggregate, path by label, else arrival
-    # order); sessions by sort_paths; subagents keep arrival order.
+    # by the active sort (cost by the heading's sum, path by label, else
+    # arrival order); sessions by sort_paths; subagents keep arrival order.
     method sort_siblings {ids} {
         if {[llength $ids] == 0} { return $ids }
         set bykey [dict create]
@@ -3579,8 +3557,8 @@ oo::class create ::questlog::ui::SessionList {
                 if {$SortKey eq "cost"} {
                     set valmap [dict create]
                     foreach id $ids {
-                        set k [my node_field $id key]
-                        dict set valmap $k [dict get [my folder_totals $k] cost]
+                        dict set valmap [my node_field $id key] \
+                            [dict get [my node_aggregate $id 1] cost]
                     }
                     set order [my sort_folders $order $valmap -real]
                 } elseif {$SortKey eq "path"} {
@@ -3598,18 +3576,14 @@ oo::class create ::questlog::ui::SessionList {
         return [lmap k $order { dict get $bykey $k }]
     }
 
-    # A folder with no viewable session anywhere beneath it (none of its own
-    # shown, none in a folder it holds) leaves the rendered view but stays in
-    # the store, so it returns once a session is shown again. One whose own
+    # A folder with no shown session anywhere beneath it (none of its own,
+    # none in a folder it holds) leaves the rendered view but stays in the
+    # store, so it returns once a session is shown again. One whose own
     # sessions a list-view toggle hides stays a row while a folder beneath
     # shows one: the toggle hides rows, it does not reshape the tree.
     method render_skip {id} {
-        if {[my node_field $id kind] ne "folder"} { return 0 }
-        if {[my folder_visible_count [my node_field $id key]] > 0} { return 0 }
-        foreach c [my node_field $id children] {
-            if {[my node_field $c kind] eq "folder" && ![my render_skip $c]} { return 0 }
-        }
-        return 1
+        return [expr {[my node_field $id kind] eq "folder"
+                      && [dict get [my node_aggregate $id 1] count] == 0}]
     }
 
     # Whether a folder's heading is currently drawn: a folder dropped from the
@@ -4040,20 +4014,12 @@ oo::class create ::questlog::ui::SessionList {
         set StatusVar [join $parts " · "]
     }
 
-    # The whole model's spend, summed from every session's aggregated cost at
-    # render time (issue #64) - the folder_totals treatment applied to the status
-    # line's grand total, so no arrival, freshen or forget has to keep a running
-    # sum in step. Subagent spend is already folded into each parent's cost, and
-    # subagent nodes are children of a session rather than a folder, so summing
-    # the folders' session children neither misses nor double-counts it.
+    # The whole model's spend, the roots' sums read at render time (issue
+    # #64), hidden rows included, so no arrival, freshen or forget has to keep
+    # a running sum in step.
     method total_cost {} {
         set cst 0.0
-        foreach fid $Roots {
-            foreach sid [my node_field $fid children] {
-                set c [my node_pget $sid cost]
-                if {$c ne "" && $c > 0} { set cst [expr {$cst + $c}] }
-            }
-        }
+        foreach fid $Roots { set cst [expr {$cst + [dict get [my node_aggregate $fid] cost]}] }
         return $cst
     }
 

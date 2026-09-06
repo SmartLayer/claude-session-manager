@@ -98,8 +98,8 @@ after 200 [list set ::scan_done 1]
 vwait ::scan_done
 update
 check "three folders, in arrival order" [rendered_order] {-tmp-fd-p1 -tmp-fd-p2 -tmp-fd-p3}
-check "P1 count = 1 viewable" [$SL folder_visible_count -tmp-fd-p1] 1
-check "P2 count = 1 viewable" [$SL folder_visible_count -tmp-fd-p2] 1
+check "P1 count = 1 viewable" [dict get [$SL node_aggregate [$SL fid -tmp-fd-p1] 1] count] 1
+check "P2 count = 1 viewable" [dict get [$SL node_aggregate [$SL fid -tmp-fd-p2] 1] count] 1
 
 # --- 2. Turn running-only ON. The base class holds the filter; the running poll settles
 #        the view each tick, so mark only P2's session running and let a poll pass:
@@ -112,14 +112,14 @@ check "P3 detached (no running session)"  [$SL folder_attached -tmp-fd-p3] 0
 check "P2 stays attached (has a running session)" [$SL folder_attached -tmp-fd-p2] 1
 check "P1 still in the model"              [$SL has_folder -tmp-fd-p1] 1
 check "only P2 is drawn"                   [rendered_order] {-tmp-fd-p2}
-check "P2 heading shows 1 viewable"        [$SL folder_visible_count -tmp-fd-p2] 1
+check "P2 heading shows 1 viewable"        [dict get [$SL node_aggregate [$SL fid -tmp-fd-p2] 1] count] 1
 
 # --- 3. Turn running-only OFF. P1 and P3 re-attach AROUND P2, order intact.
 $SL attr_filter_set running 0
 update
 check "all three drawn again"             [$SL folder_attached -tmp-fd-p1] 1
 check "order preserved across mass re-attach" [rendered_order] {-tmp-fd-p1 -tmp-fd-p2 -tmp-fd-p3}
-check "P2 count back to 1"                 [$SL folder_visible_count -tmp-fd-p2] 1
+check "P2 count back to 1"                 [dict get [$SL node_aggregate [$SL fid -tmp-fd-p2] 1] count] 1
 
 # --- 4. A filter with no poll behind it detaches folders on the toggle alone.
 #        Running rides the liveness reconcile; bookmarked has no such follow-up,

@@ -100,7 +100,7 @@ update
 
 $SL attr_filter_set bookmarked 1
 update
-check "bookmarked only: two rows shown" [$SL folder_visible_count $FOLDER] 2
+check "bookmarked only: two rows shown" [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 2
 check "bookmarked only: heading reads 2 of 3" [counts] "2 of 3"
 check "B is rendered" [$SL sflag $Bp rendered] 1
 
@@ -114,7 +114,7 @@ $SL reconcile_one $Bp
 check "hidden re-derived at the toggle itself" [$SL sflag $Bp hidden] 1
 settle
 check "B left the view"                 [$SL sflag $Bp rendered] 0
-check "one shown row remains"           [$SL folder_visible_count $FOLDER] 1
+check "one shown row remains"           [dict get [$SL node_aggregate [$SL fid $FOLDER] 1] count] 1
 check "heading recounts to 1 of 3"      [counts] "1 of 3"
 check "no apply_attr_filters pass ran"  $::applies 0
 

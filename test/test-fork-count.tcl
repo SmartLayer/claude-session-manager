@@ -32,7 +32,7 @@ package require streamtree
 # the Scan/Search/SessionList filter path reads ::questlog::config; source both
 # and create the fonts before constructing any widget.
 set ::questlog_config_only 1; source [file join $ROOT questlog]
-foreach f {ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
+foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
            lib/match.tcl ui/terminal.tcl ui/live.tcl lib/scan.tcl lib/search.tcl \
            ui/drag.tcl ui/toolbar.tcl ui/reveal.tcl ui/sessions.tcl} {
     source [file join $ROOT $f]
@@ -72,7 +72,7 @@ proc check {label expected} {
     set d [llength [lsort -unique $l]]
     set c 0
     if {[$SL has_folder $FOLDER]} {
-        set c [dict get [$SL folder_totals $FOLDER] count]
+        set c [dict get [$SL node_aggregate [$SL fid $FOLDER]] count]
     }
     set ok [expr {$n == $d && $d == $c && $c == $expected}]
     if {!$ok} { incr fails }
