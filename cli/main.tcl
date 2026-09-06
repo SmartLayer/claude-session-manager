@@ -71,6 +71,124 @@ proc ::questlog::cli::main::format_secs {secs} {
     return $secs
 }
 
+# ---- totals ----------------------------------------------------------------
+#
+# A query answers which sessions match; these answer what they came to. One
+# accumulator serves every surface: --shortstat prints it over the result and
+# again per folder, --json hangs it on each folder object, --markdown renders it
+# under each folder heading. Its keys are the shortstat stats dict's keys, so
+# there is one name per number rather than one per surface.
+#
+# The caveat below travels with the figures, not with the documentation, because
+# a reader meets a total at the moment they need to distrust it: human_secs and
+# duration_secs are scalars per session, so two terminals running at once sum to
+# twice the wall clock, and a whole-session figure credits the whole session to
+# whatever the query asked about.
+namespace eval ::questlog::cli::main {
+    variable TimeCaveat "whole-session wall clock: concurrent sessions double\
+count, and a session that only partly concerned the query counts whole"
+}
+
+proc ::questlog::cli::main::totals_zero {} {
+    return [dict create sessions 0 subagents 0 turns 0 \
+        input_tokens 0 output_tokens 0 cache_write_tokens 0 cache_read_tokens 0 \
+        cost 0.0 duration_secs 0 human_secs 0 first_ts "" last_ts "" days {}]
+}
+
+# The calendar day an ISO transcript timestamp fell on, in the reader's own
+# timezone: the corpus stamps UTC, and a day boundary read in UTC would split a
+# working day (or join two) for anyone not on it. An unparseable or empty stamp
+# yields "" and is counted as no day.
+proc ::questlog::cli::main::local_day {ts} {
+    if {[catch {clock scan [string range $ts 0 18] \
+            -format "%Y-%m-%dT%H:%M:%S" -gmt 1} epoch]} { return "" }
+    return [clock format $epoch -format %Y-%m-%d]
+}
+
+# Fold one session's or subagent's cost dict into an accumulator. kind is the
+# count it lands in (sessions or subagents); ts is the session's first
+# timestamp, which only a parent session carries, so the span and the day set
+# count sessions rather than transcripts. The cost sentinel (-1.0, no rate
+# matched) adds nothing, as the shortstat total has always had it. The one
+# contribution is built as an accumulator of its own and merged, so widening a
+# span is written once, in totals_merge.
+proc ::questlog::cli::main::totals_add {tot ci kind {ts ""}} {
+    set one [totals_zero]
+    dict incr one $kind
+    foreach f {turns input_tokens output_tokens cache_write_tokens \
+               cache_read_tokens duration_secs human_secs} {
+        set v [dict getdef $ci $f 0]
+        if {[string is integer -strict $v]} { dict incr one $f $v }
+    }
+    set c [dict getdef $ci cost_usd ""]
+    if {[string is double -strict $c] && $c > 0} { dict set one cost $c }
+    if {[set day [local_day $ts]] ne ""} {
+        dict set one days $day 1
+        dict set one first_ts $ts
+        dict set one last_ts $ts
+    }
+    return [totals_merge $tot $one]
+}
+
+# Fold one accumulator into another: how a folder's totals reach the result's,
+# so the whole and its parts are summed once, by one rule. The day sets union,
+# so a day two folders share counts once.
+proc ::questlog::cli::main::totals_merge {a b} {
+    foreach f {sessions subagents turns input_tokens output_tokens \
+               cache_write_tokens cache_read_tokens duration_secs human_secs} {
+        dict incr a $f [dict get $b $f]
+    }
+    dict set a cost [expr {[dict get $a cost] + [dict get $b cost]}]
+    dict for {d _} [dict get $b days] { dict set a days $d 1 }
+    set bf [dict get $b first_ts]
+    if {$bf ne "" && ([dict get $a first_ts] eq ""
+            || [string compare $bf [dict get $a first_ts]] < 0)} {
+        dict set a first_ts $bf
+    }
+    if {[string compare [dict get $b last_ts] [dict get $a last_ts]] > 0} {
+        dict set a last_ts [dict get $b last_ts]
+    }
+    return $a
+}
+
+# An accumulator as a JSON object: the counts and tokens as they stand, the
+# span as the two ISO stamps --json already speaks, the day set as its size, and
+# the caveat as a field so a consumer reading only the totals still reads it.
+proc ::questlog::cli::main::format_totals_json {tot} {
+    return [format {{"sessions":%d,"subagent_sessions":%d,"turns":%d,"input_tokens":%d,"output_tokens":%d,"cache_write_tokens":%d,"cache_read_tokens":%d,"cost_usd":%.6f,"human_secs":%d,"duration_secs":%d,"first_ts":"%s","last_ts":"%s","days":%d,"time_basis":"%s"}} \
+        [dict get $tot sessions] [dict get $tot subagents] [dict get $tot turns] \
+        [dict get $tot input_tokens] [dict get $tot output_tokens] \
+        [dict get $tot cache_write_tokens] [dict get $tot cache_read_tokens] \
+        [dict get $tot cost] [dict get $tot human_secs] [dict get $tot duration_secs] \
+        [escape_json [dict get $tot first_ts]] [escape_json [dict get $tot last_ts]] \
+        [dict size [dict get $tot days]] [escape_json $::questlog::cli::main::TimeCaveat]]
+}
+
+# An accumulator as one middot-separated line, for the surfaces meant to be
+# read: a folder heading in --markdown, a folder row in --shortstat. Times use
+# fmt_dur, the format the session list's Duration column and md_meta use. A span
+# inside one day prints that day rather than repeating it.
+proc ::questlog::cli::main::totals_line {tot} {
+    set parts [list [count_label [dict get $tot sessions] session]]
+    if {[dict get $tot subagents] > 0} {
+        lappend parts [count_label [dict get $tot subagents] "subagent session"]
+    }
+    lappend parts [count_label [dict get $tot turns] turn] \
+        "human [::questlog::cost::fmt_dur [dict get $tot human_secs]]" \
+        "machine [::questlog::cost::fmt_dur [dict get $tot duration_secs]]" \
+        [format {$%.2f} [dict get $tot cost]]
+    set lo [local_day [dict get $tot first_ts]]
+    set hi [local_day [dict get $tot last_ts]]
+    if {$lo ne ""} { lappend parts [expr {$lo eq $hi ? $lo : "$lo to $hi"}] }
+    lappend parts [count_label [dict size [dict get $tot days]] day]
+    return [join $parts " · "]
+}
+
+# "1 session", "3 sessions": a count and its noun, pluralised by the count.
+proc ::questlog::cli::main::count_label {n word} {
+    return "$n $word[expr {$n == 1 ? {} : {s}}]"
+}
+
 # Print JSON to stdout. Hand-crafted serializer is extremely robust and
 # completely free of external dependencies or type-guessing bugs.
 proc ::questlog::cli::main::format_json {folders_dict} {
@@ -107,20 +225,32 @@ proc ::questlog::cli::main::format_json {folders_dict} {
                 [join $subagents_parts ","]]
         }
         
-        lappend folder_parts [format {{"folder":"%s","project_path":"%s","sessions":[%s]}} \
+        # The folder's totals ride beside its sessions, so a consumer reading a
+        # folder reads what it came to without walking the array. A caller with
+        # no totals (a serializer test, a fixture) emits the shape it always did.
+        set tail ""
+        if {[dict exists $data totals]} {
+            set tail ",\"totals\":[format_totals_json [dict get $data totals]]"
+        }
+        lappend folder_parts [format {{"folder":"%s","project_path":"%s","sessions":[%s]%s}} \
             [escape_json $folder] \
             [escape_json $path] \
-            [join $session_parts ","]]
+            [join $session_parts ","] \
+            $tail]
     }
     return "\[[join $folder_parts ","]\]"
 }
 
 # Render the --shortstat summary: a terse totals block over the same result set
 # --json would emit. Sums the priced cost (the unknown sentinel and zero are
-# skipped), the session and subagent counts, the turns, and the token categories
-# that make up the cost. A non-zero limit capped the set, so it is named rather
-# than left to read as a complete total.
-proc ::questlog::cli::main::format_shortstat {stats limit} {
+# skipped), the session and subagent counts, the turns, the token categories
+# that make up the cost, the human and machine time, and the calendar reach of
+# the result - its first and last session and how many distinct days hold one. A
+# non-zero limit capped the set, so it is named rather than left to read as a
+# complete total. `folders` is a list of {label totals cost} rows, printed under
+# the whole as the breakdown by project folder, dearest first: the breakdown
+# answers "what did this project cost me", so the answer heads the list.
+proc ::questlog::cli::main::format_shortstat {stats limit {folders {}}} {
     set lines [list]
     lappend lines [format "sessions           %s"    [dict get $stats sessions]]
     lappend lines [format "subagent sessions  %s"    [dict get $stats subagents]]
@@ -130,9 +260,21 @@ proc ::questlog::cli::main::format_shortstat {stats limit} {
     lappend lines [format "cache write tokens %s"    [dict get $stats cache_write_tokens]]
     lappend lines [format "cache read tokens  %s"    [dict get $stats cache_read_tokens]]
     lappend lines [format "total cost         \$%.2f" [dict get $stats cost]]
+    lappend lines [format "human time         %s"    [::questlog::cost::fmt_dur [dict get $stats human_secs]]]
+    lappend lines [format "machine time       %s"    [::questlog::cost::fmt_dur [dict get $stats duration_secs]]]
+    lappend lines [format "first session      %s"    [local_day [dict get $stats first_ts]]]
+    lappend lines [format "last session       %s"    [local_day [dict get $stats last_ts]]]
+    lappend lines [format "days with sessions %s"   [dict size [dict get $stats days]]]
     if {$limit > 0} {
         lappend lines [format "limit applied      %s (totals cover the first %s sessions only)" \
             $limit $limit]
+    }
+    lappend lines "" "time is $::questlog::cli::main::TimeCaveat."
+    if {[llength $folders] > 1} {
+        lappend lines "" "by folder:"
+        foreach pair [lsort -real -decreasing -index 2 $folders] {
+            lappend lines "  [lindex $pair 0]" "    [totals_line [lindex $pair 1]]"
+        }
     }
     return [join $lines "\n"]
 }
@@ -199,6 +341,9 @@ proc ::questlog::cli::main::format_markdown {folders_dict} {
     dict for {folder data} $folders_dict {
         set path [dict get $data project_path]
         lappend out "# [expr {$path ne {} ? $path : $folder}]"
+        if {[dict exists $data totals]} {
+            lappend out "" "*[totals_line [dict get $data totals]]*"
+        }
         foreach sess [dict get $data sessions] {
             lappend out "" "## [dict get $sess title]"
             lappend out [md_meta [dict get $sess uuid] [dict get $sess first_ts] \
@@ -217,6 +362,11 @@ proc ::questlog::cli::main::format_markdown {folders_dict} {
             }
         }
         lappend out ""
+    }
+    # The caveat closes the document rather than heading each folder: it holds
+    # for every figure above it, and repeating it per folder would drown them.
+    if {[dict size $folders_dict]} {
+        lappend out "---" "*Totals are $::questlog::cli::main::TimeCaveat.*"
     }
     return [join $out "\n"]
 }
@@ -630,10 +780,11 @@ proc ::questlog::cli::main::run {q} {
     # 4. Construct JSON Model
     set output_folders [dict create]
 
-    # --shortstat accumulators, summed over the same result set as --json.
-    set n_sessions 0; set n_subagents 0
-    set total_cost 0.0; set total_turns 0
-    set total_in 0; set total_out 0; set total_cw 0; set total_cr 0
+    # Totals, accumulated per folder over the same result set --json emits and
+    # merged into the whole below. The result-wide figure --shortstat prints is
+    # the sum of the folder figures, by the one fold, so the two cannot disagree.
+    set folder_totals [dict create]
+    set n_sessions 0
 
     dict for {parent_path group_data} $session_groups {
         set parent_row [dict get $group_data parent_row]
@@ -663,24 +814,14 @@ proc ::questlog::cli::main::run {q} {
         # spend, and accumulate their totals in temporaries so the whole subtree
         # can be dropped (and never counted) if nothing in it landed in the window.
         set subagents_list [list]
-        set sub_n 0
-        set sub_cost_sum 0.0; set sub_turns_sum 0
-        set sub_in_sum 0; set sub_out_sum 0; set sub_cw_sum 0; set sub_cr_sum 0
+        set sub_totals [::questlog::cli::main::totals_zero]
         foreach sub [$scan subagents_for $parent_path] {
             set sub_path [dict get $sub path]
             set sub_cost_info [dict get $costs $sub_path]
             # In accrued mode drop a subagent with no in-window spend.
             if {$accrued && ![::questlog::cli::main::has_window_spend $sub_cost_info]} continue
-            incr sub_n
-            set sub_cost [dict getdef $sub_cost_info cost_usd ""]
-            if {[string is double -strict $sub_cost] && $sub_cost > 0} {
-                set sub_cost_sum [expr {$sub_cost_sum + $sub_cost}]
-            }
-            incr sub_turns_sum [dict getdef $sub_cost_info turns 0]
-            set sub_in_sum  [expr {$sub_in_sum  + [dict getdef $sub_cost_info input_tokens 0]}]
-            set sub_out_sum [expr {$sub_out_sum + [dict getdef $sub_cost_info output_tokens 0]}]
-            set sub_cw_sum  [expr {$sub_cw_sum  + [dict getdef $sub_cost_info cache_write_tokens 0]}]
-            set sub_cr_sum  [expr {$sub_cr_sum  + [dict getdef $sub_cost_info cache_read_tokens 0]}]
+            set sub_totals [::questlog::cli::main::totals_add \
+                $sub_totals $sub_cost_info subagents]
 
             # Find and limit matching snippets for this subagent if any
             set limited_sub_matches [limit_matches [dict getdef $group_data subagent_matches {}] $sub_limit $sub_path $ctx_before $ctx_after $dialogue $dialogue_roles]
@@ -706,23 +847,15 @@ proc ::questlog::cli::main::run {q} {
         }
         if {$accrued && $limit > 0 && $n_sessions >= $limit} continue
 
-        # The subtree is kept: commit it to the --shortstat totals now.
+        # The subtree is kept: commit it to its folder's totals now. The date
+        # span and the day set follow the session, so its subagents (which carry
+        # no first timestamp of their own) neither widen nor re-count a day.
         incr n_sessions
-        if {[string is double -strict $parent_cost] && $parent_cost > 0} {
-            set total_cost [expr {$total_cost + $parent_cost}]
-        }
-        incr total_turns $parent_turns
-        set total_in  [expr {$total_in  + [dict getdef $cost_info input_tokens 0]}]
-        set total_out [expr {$total_out + [dict getdef $cost_info output_tokens 0]}]
-        set total_cw  [expr {$total_cw  + [dict getdef $cost_info cache_write_tokens 0]}]
-        set total_cr  [expr {$total_cr  + [dict getdef $cost_info cache_read_tokens 0]}]
-        incr n_subagents $sub_n
-        set total_cost   [expr {$total_cost + $sub_cost_sum}]
-        incr total_turns $sub_turns_sum
-        set total_in  [expr {$total_in  + $sub_in_sum}]
-        set total_out [expr {$total_out + $sub_out_sum}]
-        set total_cw  [expr {$total_cw  + $sub_cw_sum}]
-        set total_cr  [expr {$total_cr  + $sub_cr_sum}]
+        set ftot [dict getdef $folder_totals $folder [::questlog::cli::main::totals_zero]]
+        set ftot [::questlog::cli::main::totals_add \
+            $ftot $cost_info sessions [dict get $parent_row first_ts]]
+        dict set folder_totals $folder \
+            [::questlog::cli::main::totals_merge $ftot $sub_totals]
 
         set session_json [dict create \
             "uuid" $parent_uuid \
@@ -747,12 +880,20 @@ proc ::questlog::cli::main::run {q} {
         dict set output_folders $folder $folder_data
     }
 
+    # Hang each folder's totals on its object, and fold them into the whole.
+    set whole [::questlog::cli::main::totals_zero]
+    set breakdown [list]
+    dict for {folder ftot} $folder_totals {
+        set whole [::questlog::cli::main::totals_merge $whole $ftot]
+        dict set output_folders $folder totals $ftot
+        set path [dict get $output_folders $folder project_path]
+        lappend breakdown [list [expr {$path ne "" ? $path : $folder}] $ftot \
+            [dict get $ftot cost]]
+    }
+
     # Emit the result in the requested mode.
     if {$mode eq "shortstat"} {
-        puts [format_shortstat [dict create \
-            sessions $n_sessions subagents $n_subagents cost $total_cost \
-            turns $total_turns input_tokens $total_in output_tokens $total_out \
-            cache_write_tokens $total_cw cache_read_tokens $total_cr] $limit]
+        puts [format_shortstat $whole $limit $breakdown]
     } elseif {$mode eq "markdown"} {
         puts [format_markdown $output_folders]
     } else {
