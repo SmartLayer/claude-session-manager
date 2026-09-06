@@ -27,7 +27,7 @@ streamtree renders a tree of abstract nodes into a single `text` widget: nodes n
 
 | streamtree | ttk::treeview | Notes |
 |---|---|---|
-| `insert parent kind key payload ?-pos {before id}?` | `insert parent index -id ...` | `kind` selects the row's per-node-type hooks (`start_gravity`, `row_tags`, ...); returns a node id; renders now if the parent is open and the node is not hidden; `-pos {before id}` seats it before that sibling in the store and the view alike (a sibling the parent does not hold appends), else it goes last |
+| `insert parent kind key payload ?-pos {before id}?` | `insert parent index -id ...` | `kind` selects the row's per-node-type hooks (`start_gravity`, `row_tags`, ...); returns a node id; renders now if the node is not hidden and its parent's own row is drawn and open, so a node born under a shut or undrawn ancestor waits in the store until that ancestor opens; `-pos {before id}` seats it before that sibling in the store and the view alike (a sibling the parent does not hold appends), else it goes last |
 | `delete id` | `delete id` | removes the node and its subtree from view and store |
 | `detach id` | `detach id` | removes the row from view, keeps the node (and its open state) in the store |
 | `item id` | `item id -values ...` | rewrites the node's own row in place |
@@ -111,7 +111,7 @@ The check is not free: every audited primitive walks the whole store, the drawn 
 
 ## PERFORMANCE
 
-Measured September 2026 on the 0.7.0 release (medians of 3, min-max in parentheses) on an Intel Core Ultra 7 258V under Xvfb software rendering, Tcl/Tk 9.0.3, by `bench-streamtree.tcl` beside the module. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
+Measured September 2026 on the 0.7.0 release (medians of 3, min-max in parentheses) on an Intel Core Ultra 7 258V under Xvfb software rendering, Tcl/Tk 9.0.3, by `bench-streamtree.tcl` beside the module. The streaming row is the median of three whole-bench runs pinned to the machine's performance cores; unpinned, a run that lands on an efficiency core carries a p95 half again as large, which measures the core it drew rather than the widget. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
 
 | scenario | N | median (min-max) | per row | notes |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ Measured September 2026 on the 0.7.0 release (medians of 3, min-max in parenthes
 | bulk load, flat | 50,000 | 3,717 ms (3,630-3,923) | 74.3 µs | single flush for the whole batch |
 | bulk load, treed | 10,000 | 474 ms (455-485) | 47.4 µs | 100 expanded folders |
 | bulk load, treed | 50,000 | 4,182 ms (4,136-4,383) | 83.6 µs | 100 expanded folders |
-| streaming | 10k + 1,000 | 2,437 inserts/s | p95 814 µs | idle flush per insert; reader's line held |
+| streaming | 10k + 1,000 | 2,289 inserts/s | p95 738 µs | idle flush per insert; reader's line held |
 | full rebuild | 10,000 | 807 ms (780-887) | 80.7 µs | the debounced resort's cost, and what a batch of moves pays once |
 | memory, marginal row | 10k→50k | | 4.36 kB/row | includes the retained payload dict, per-row tag, two marks |
 | subtree fold | 3,160 | 2 ms (2-3) | 0.7 µs | 160 folders three deep under 10 roots, default counting hooks, each root folded once |
