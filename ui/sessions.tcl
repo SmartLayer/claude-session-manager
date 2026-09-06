@@ -428,6 +428,7 @@ oo::class create ::questlog::ui::SessionList {
         }
     }
     method on_row_rendered {id} {
+        my indent_tag $id [my node_field $id tag] [my row_tags [my node_field $id kind]]
         switch [my node_field $id kind] {
             folder {
                 set htag [my node_field $id tag]
@@ -659,19 +660,24 @@ oo::class create ::questlog::ui::SessionList {
         # column-tab mechanism the right-pinned metadata already rides on.
         #
         # The stops arrive already sane (positive, strictly increasing) from
-        # layout_columns. Add the leading title stop only when it fits inside the
-        # first metadata stop; in a degenerate narrow layout it does not fit and
-        # the slug just tabs to the first column (a build-time state, replaced
-        # once the window maps).
-        set first [lindex $tabs 0]
-        set title_x [expr {12 + [my title_gutter_w]}]
-        if {$first ne "" && $title_x < $first} {
-            $Text tag configure sessionhead -tabs [list $title_x left {*}$tabs]
-        } else {
-            $Text tag configure sessionhead -tabs $tabs
-        }
+        # layout_columns.
+        $Text tag configure sessionhead -tabs [my session_tabs $tabs 0]
         $Text tag configure folderhead -tabs $tabs
         $Text tag configure childhead  -tabs $tabs
+    }
+
+    # A session row's stops: the leading title stop, shifted in by px for a
+    # nested row, then the metadata stops. The title stop is added only when it
+    # fits inside the first metadata stop; in a degenerate narrow layout it does
+    # not fit and the slug just tabs to the first column (a build-time state,
+    # replaced once the window maps).
+    method session_tabs {tabs px} {
+        set first [lindex $tabs 0]
+        set title_x [expr {12 + [my title_gutter_w] + $px}]
+        if {$first ne "" && $title_x < $first} {
+            return [list $title_x left {*}$tabs]
+        }
+        return $tabs
     }
 
     # The fixed left gutter on a session row, measured past sessionhead's
@@ -681,6 +687,44 @@ oo::class create ::questlog::ui::SessionList {
     method title_gutter_w {} {
         return [expr {[font measure QLList \
             "▾ $::questlog::ui::GLYPH_RUNNING$::questlog::ui::GLYPH_BOOKMARK"] + 8}]
+    }
+
+    # ---- depth --------------------------------------------------------
+    #
+    # A row steps in by one marker width per folder between its own folder and
+    # the root, so a nested folder's heading starts under its parent's label and
+    # its rows under that. The kind tags (folderhead, sessionhead, snippet, ...)
+    # carry absolute margins, and a Tk tag's margin replaces rather than adds,
+    # so the shift rides the tag each row already wears alone (the node tag; a
+    # snippet's n#/c# tag), raised over the kind tag. The metadata stops are
+    # absolute and stay put; a session's title stop moves with its row.
+
+    # Folders between a row's own folder and the root.
+    method nesting {id} {
+        set n 0
+        foreach a [my ancestors $id] {
+            if {[my node_field $a kind] eq "folder"} { incr n }
+        }
+        return [expr {[my node_field $id kind] eq "folder" ? $n : $n - 1}]
+    }
+
+    method indent_px {id} {
+        return [expr {[my nesting $id] * [font measure QLList "▸ "]}]
+    }
+
+    # Shift a row's own tag in from its kind tag by the row's depth; at the
+    # root the kind tag's margins hold and the tag is left alone.
+    method indent_tag {id tag kindtag} {
+        set px [my indent_px $id]
+        if {$px <= 0} return
+        foreach opt {-lmargin1 -lmargin2} {
+            set m [$Text tag cget $kindtag $opt]
+            $Text tag configure $tag $opt [expr {($m eq "" ? 0 : $m) + $px}]
+        }
+        if {$kindtag eq "sessionhead"} {
+            $Text tag configure $tag -tabs [my session_tabs $ColTabs $px]
+        }
+        $Text tag raise $tag $kindtag
     }
 
     # Re-fit every rendered row's ellipsis after a width change (a base-class
@@ -1251,6 +1295,7 @@ oo::class create ::questlog::ui::SessionList {
         }
         set sid [my sid $path]
         set ntag "n#[incr NextId]"
+        my indent_tag $sid $ntag snippet
         # Normalise to a type with a known badge pill; an unknown block type
         # falls back to the neutral system pill.
         set fgrole [dict getdef {
@@ -1310,6 +1355,7 @@ oo::class create ::questlog::ui::SessionList {
     method render_name_snippet {path content lineoff} {
         set sid [my sid $path]
         set ntag "n#[incr NextId]"
+        my indent_tag $sid $ntag snippet
         set slug [my sget $path slug]
         set superseded [expr {$slug ne "" && $content ne $slug}]
         set label [expr {$superseded ? "FORMER NAME" : "NAME"}]
@@ -1350,6 +1396,7 @@ oo::class create ::questlog::ui::SessionList {
     method render_overflow {path more} {
         set sid [my sid $path]
         set ntag "n#[incr NextId]"
+        my indent_tag $sid $ntag snippet
         set m [my append_open $sid]
         my emit $m "▏" [list snippet snippetbar $ntag]
         my emit $m "  +$more" [list snippet snippetmore $ntag]
@@ -1378,6 +1425,7 @@ oo::class create ::questlog::ui::SessionList {
         set subt [my sget $path sub_total]
         set nsub [llength [my session_child_paths $path]]
         set ntag "n#[incr NextId]"
+        my indent_tag $sid $ntag snippet
         set m [my append_open $sid]
         my emit $m "▏" [list snippet snippetbar $ntag]
         my emit $m "\t" [list snippet $ntag]
@@ -1639,6 +1687,7 @@ oo::class create ::questlog::ui::SessionList {
     method render_child_snippet {path cp btype content lineoff} {
         set cid [my sid $cp]
         set ntag "c#[incr NextId]"
+        my indent_tag $cid $ntag childsnip
         # A matched line is loose content inside the subagent's region: the door
         # emits it at the subagent's append point and advances the subagent end
         # past it, carrying the session and folder ends with it where they
@@ -1667,6 +1716,7 @@ oo::class create ::questlog::ui::SessionList {
     method render_child_overflow {path cp more} {
         set cid [my sid $cp]
         set ntag "c#[incr NextId]"
+        my indent_tag $cid $ntag childsnip
         set m [my append_open $cid]
         my emit $m "▏  " [list childsnip childbar $ntag]
         my emit $m "+$more more [expr {$more == 1 ? {match} : {matches}}]\
@@ -2014,6 +2064,7 @@ oo::class create ::questlog::ui::SessionList {
     # the subject start and meta_run asks the base class to paint the contiguous muted
     # metadata run. A folder paints no meta run (its cells are tagged singly).
     method render_subject {node max} {
+        set max [expr {$max - [my indent_px $node]}]
         switch -- [my node_field $node kind] {
             folder   { return [my folder_subject $node] }
             subagent { return [my child_subject $node $max] }
@@ -2294,7 +2345,8 @@ oo::class create ::questlog::ui::SessionList {
         # Marker joined to the label by a space; the label is truncated so it
         # never runs into the right-pinned aggregates.
         set fixed [expr {[font measure QLList "$marker "] \
-                         + [font measure QLList $count_str]}]
+                         + [font measure QLList $count_str] \
+                         + [my indent_px $node]}]
         set full [my folder_label $node]
         set label [my truncate_px $full \
                        [expr {$FolderLabelMax - $fixed}] QLList]
