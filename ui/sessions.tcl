@@ -131,6 +131,8 @@ oo::class create ::questlog::ui::SessionList {
                               ;# while one is open across begin_batch/end_batch
     variable DirtyHeadings    ;# dict folder -> 1: headings whose aggregates moved
                               ;# during the open batch, redrawn once at its close
+    variable HeadingFold      ;# {fid agg}: the shown fold of the heading whose
+                              ;# line is being built, "" outside a build
     variable TurnsView        ;# the toolbar's turns floor as a view filter: a
                               ;# session with nturns below it is hidden, never
                               ;# excluded - it stays stored, priced and counted
@@ -198,6 +200,7 @@ oo::class create ::questlog::ui::SessionList {
         set ViewRebuildTimer ""
         set InBatch 0
         set FlushBatch ""
+        set HeadingFold ""
         set DirtyHeadings [dict create]
         set TurnsView 1
         set Query [dict create terms [list] nocase 0]
@@ -1964,7 +1967,7 @@ oo::class create ::questlog::ui::SessionList {
     method cell_values {node} {
         set kind [my node_field $node kind]
         if {$kind eq "folder"} {
-            set agg [my node_aggregate $node 1]
+            set agg [my folder_sums $node]
             set cells [my meta_cells [dict filter $agg script {k v} {expr {$v > 0}}]]
             return [lmap col {date size cost turns duration ah} {
                 list $col [dict get $cells $col]
@@ -1991,7 +1994,7 @@ oo::class create ::questlog::ui::SessionList {
             if {$col ni {size cost duration ah}} { return {} }
             set ctag meta
             if {$col eq "cost"} {
-                set fc [dict get [my node_aggregate $node 1] cost]
+                set fc [dict get [my folder_sums $node] cost]
                 if {$fc >= 1.0} { set ctag cost-outlier } elseif {$fc >= 0.10} { set ctag cost-mid }
             }
             return [list $ctag foldagg]
@@ -2303,6 +2306,39 @@ oo::class create ::questlog::ui::SessionList {
         return [expr {$dir ne "" && ![file isdirectory $dir]}]
     }
 
+    # ---- the fold behind a heading --------------------------------------
+    #
+    # A heading's subject, its cells and their tags all read what the folder
+    # shows (the fold over its shown rows), and the base class asks for them
+    # one hook at a time while it builds the line, so a heading redraw folded
+    # its subtree three times over, the root's over the whole corpus on every
+    # flush. The fold is taken once for the one line build the two builders
+    # bracket and dropped with it: nothing is kept across builds, so a move,
+    # a forget or a freshen cannot leave a heading behind. A hook asked
+    # outside a build (sort_siblings, a test) folds for itself.
+    method render_row {id {before ""}} {
+        set outer $HeadingFold
+        set HeadingFold [my heading_fold $id]
+        try { next $id $before } finally { set HeadingFold $outer }
+    }
+    method item {id} {
+        if {![my node_field $id rendered]} return
+        set outer $HeadingFold
+        set HeadingFold [my heading_fold $id]
+        try { next $id } finally { set HeadingFold $outer }
+    }
+    method heading_fold {id} {
+        if {[my node_field $id kind] ne "folder"} { return "" }
+        return [list $id [my node_aggregate $id 1]]
+    }
+    # What a folder shows, summed: the build's fold, or a fresh one.
+    method folder_sums {node} {
+        if {$HeadingFold ne "" && [lindex $HeadingFold 0] eq $node} {
+            return [lindex $HeadingFold 1]
+        }
+        return [my node_aggregate $node 1]
+    }
+
     # The folder heading subject: the marker, the (truncated) project label, the
     # gone glyph when its directory no longer exists, and a bare "(N)" count of
     # the sessions beneath it, nested folders included - "(N of M)" when a list
@@ -2315,7 +2351,7 @@ oo::class create ::questlog::ui::SessionList {
     # toggles expand/collapse, the label selects the folder.
     method folder_subject {node} {
         set marker [expr {[my node_field $node expanded] ? "▾" : "▸"}]
-        set n [dict get [my node_aggregate $node 1] count]
+        set n [dict get [my folder_sums $node] count]
         set total [expr {[my any_view_toggle] ? [dict get [my node_aggregate $node] count] : $n}]
         set count_str [expr {[my folder_gone $node] ? " $::questlog::ui::GLYPH_GONE" : ""}]
         if {$n > 0} {
