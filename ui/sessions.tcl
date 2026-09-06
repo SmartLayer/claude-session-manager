@@ -127,6 +127,8 @@ oo::class create ::questlog::ui::SessionList {
     variable InBatch          ;# 1 between begin_batch and end_batch: row methods
                               ;# leave the bracket (state, anchor, headings,
                               ;# resort) to the batch instead of paying it per row
+    variable FlushBatch       ;# the coroutine parked inside the base class's batch
+                              ;# while one is open across begin_batch/end_batch
     variable DirtyHeadings    ;# dict folder -> 1: headings whose aggregates moved
                               ;# during the open batch, redrawn once at its close
     variable TurnsView        ;# the toolbar's turns floor as a view filter: a
@@ -195,6 +197,7 @@ oo::class create ::questlog::ui::SessionList {
         set Pinned [dict create]
         set ViewRebuildTimer ""
         set InBatch 0
+        set FlushBatch ""
         set DirtyHeadings [dict create]
         set TurnsView 1
         set Query [dict create terms [list] nocase 0]
@@ -989,25 +992,33 @@ oo::class create ::questlog::ui::SessionList {
     }
 
     # Bracket a slice of row work so a whole idle flush does one
-    # anchor_save/restore, one redraw per touched folder heading and one
-    # schedule_resort, not one of each per row. InBatch counts depth, so the
-    # bracket nests: a row method that brackets itself when called singly
-    # (freshen_attached, on_scan_row) opens a no-op inner
-    # bracket when an outer one already holds the widget - the outermost
-    # close is the one that settles headings, anchor, state and resort.
-    # A non-counting flag broke this: render_session_matches can re-enter
-    # on_scan_row through the scan-path seam, and an inner close that
+    # anchor_save/restore, one redraw per touched folder heading, one rebuild
+    # for every move inside it and one schedule_resort, not one of each per
+    # row. The bracket is the base class's batch, which opens the widget and
+    # anchors the reader's view on the way in and restores both on the way
+    # out, running once the rebuild the moves inside deferred; it is a script
+    # bracket, so a coroutine parked inside it holds it open between the two
+    # calls, and end_batch resumes the coroutine to close it. Without that,
+    # ensure_folder's capture of held siblings and folder_after_leave's step
+    # up each paid a synchronous whole-widget rebuild mid-flush.
+    #
+    # InBatch counts depth, so the bracket nests: a row method that brackets
+    # itself when called singly (freshen_attached, on_scan_row) opens a no-op
+    # inner bracket when an outer one already holds the widget - the
+    # outermost close is the one that settles headings, anchor, state and
+    # resort. A non-counting flag broke this: render_session_matches can
+    # re-enter on_scan_row through the scan-path seam, and an inner close that
     # disabled the widget silently dropped every insert after it.
     method begin_batch {} {
         if {[incr InBatch] > 1} return
-        $Text configure -state normal
-        my anchor_save
+        set FlushBatch [my coro flush_batch [self] batch { yield }]
     }
     method end_batch {} {
         if {[incr InBatch -1] > 0} return
         dict for {f _} $DirtyHeadings { my redraw_folder_heading $f }
         set DirtyHeadings [dict create]
-        my anchor_restore
+        $FlushBatch
+        set FlushBatch ""
         $Text configure -state disabled
         my schedule_resort
     }
@@ -2220,6 +2231,7 @@ oo::class create ::questlog::ui::SessionList {
             my node_set $fid expanded 1
             my item $fid
         }
+        # Inside a flush's bracket the moves' rebuild waits for its end.
         if {[llength $held]} {
             my batch { foreach id $held { my move $id $fid } }
         }
