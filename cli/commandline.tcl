@@ -58,7 +58,7 @@ $::questlog::cli::commandline::CL section output {output:} -note {
     {}
     {  Every mode totals its result: --shortstat over the whole and again by folder,}
     {  --json and --markdown per folder. Human time is the transcript's own working}
-    {  time, machine time the span it ran over. Both are whole-session wall clock,}
+    {  time, machine time the clock it ran against. Both are whole-session figures,}
     {  so two sessions running at once count twice, and a session that only partly}
     {  concerned the query counts whole; each surface says so beside its figures.}
 }

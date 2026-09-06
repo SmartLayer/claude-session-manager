@@ -184,7 +184,6 @@ proc ::questlog::cli::main::totals_line {tot} {
     return [join $parts " · "]
 }
 
-# "1 session", "3 sessions": a count and its noun, pluralised by the count.
 proc ::questlog::cli::main::count_label {n word} {
     return "$n $word[expr {$n == 1 ? {} : {s}}]"
 }

@@ -53,7 +53,7 @@ Bound the whole result with `--since <24h|7d|2w|2026-04-01|all>`, `--until <...>
 
 The output is an array of project folders, each with its `sessions`, and each session its `subagents`. A folder carries `project_path` (the session's original directory) and `totals`; a session carries `uuid`, `path`, `title`, `first_ts`, `cost_usd`, `turns`, `duration_secs`, `human_secs`, and the matched `matches` snippets. Slice it with `jq`; the `uuid` or `path` feeds the next step.
 
-A folder's `totals` object sums that folder's matching sessions: `sessions`, `subagent_sessions`, `turns`, the four token counts, `cost_usd`, `human_secs` (working time) and `duration_secs` (the span the sessions ran over), `first_ts` and `last_ts`, and `days`, the number of distinct calendar days holding a matching session. Its `time_basis` field states what the time figures cannot know; quote it when reporting hours. Sum the folder totals with `jq` for the whole result, or ask `--shortstat` for it.
+A folder's `totals` object sums that folder's matching sessions: `sessions`, `subagent_sessions`, `turns`, `input_tokens`, `output_tokens`, `cache_write_tokens`, `cache_read_tokens`, `cost_usd`, `human_secs` (working time) and `duration_secs` (the machine time those sessions took), `first_ts` and `last_ts`, and `days`, the number of distinct calendar days holding a matching session. Its `time_basis` field states what the time figures cannot know; quote it when reporting hours. Sum the folder totals with `jq` for the whole result, or ask `--shortstat` for it.
 
 ## Reading hits with their context
 
