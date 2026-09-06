@@ -296,6 +296,8 @@ oo::class create ::streamtree::StreamTree {
     method node_aggregate {id {shown 0}} {
         return [my fold_subtree [my aggregate_seed] $id $shown]
     }
+    # The fold's own walk, not a surface a host calls: node_aggregate seeds it
+    # and every recursion carries the accumulator down.
     method fold_subtree {acc id shown} {
         set node [dict get $Nodes $id]
         if {$shown && [dict get $node hidden]} { return $acc }
