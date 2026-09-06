@@ -66,13 +66,14 @@ check enum_keeps_proj      1 [expr {"-home-test-code-proj"     in $lp_folders}]
 check enum_keeps_child     1 [expr {"-home-test-code-proj-sub" in $lp_folders}]
 check enum_keeps_hyphen    1 [expr {"-home-test-code-proj-x"   in $lp_folders}]
 
-# ---- row_subtree_match, fallback chain: /home/test/... does not exist on the
-# running machine, so the folders are unresolvable and the recorded cwd_hint
-# decides - the deleted-repo path. The hyphenated sibling still drops. ----
+# ---- row_subtree_match, the deleted-repo path: /home/test/... does not
+# exist on the running machine, so the resolver answers the cwd the
+# transcripts record (gone, but named), the stamp carries it, and the bound
+# reads it as the folder's place. The hyphenated sibling still drops. ----
 set rp [$s stamp_subtree [$s scan_one /tmp/questlog-subtree-test/-home-test-code-proj/aaaa.jsonl]]
 set rc [$s stamp_subtree [$s scan_one /tmp/questlog-subtree-test/-home-test-code-proj-sub/bbbb.jsonl]]
 set rx [$s stamp_subtree [$s scan_one /tmp/questlog-subtree-test/-home-test-code-proj-x/cccc.jsonl]]
-check gone_stamp_empty       {} [dict get $rp folder_cwd]
+check gone_stamp_recorded    /home/test/code/proj [dict get $rp folder_cwd]
 check gone_exact             1 [::questlog::scan::row_subtree_match $rp $U]
 check gone_child             1 [::questlog::scan::row_subtree_match $rc $U]
 check gone_hyphen_sibling    0 [::questlog::scan::row_subtree_match $rx $U]
