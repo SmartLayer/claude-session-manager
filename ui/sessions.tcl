@@ -2196,6 +2196,8 @@ oo::class create ::questlog::ui::SessionList {
     # The one creator of folder nodes. A folder hangs under the folder whose
     # directory most closely contains its own, or at the root when none does;
     # a folder the resolver cannot place (dir "") is a root and never a parent.
+    # This is the rule ::questlog::path::container_tree states over a whole
+    # corpus at once, applied here one folder at a time as they arrive.
     # Folders arrive in their newest session's order, not top-down, so a new
     # folder whose directory contains a sibling's takes that sibling beneath it
     # (adopt_folders); the same step hangs a folder recreated after its last
@@ -2578,9 +2580,9 @@ oo::class create ::questlog::ui::SessionList {
         return $n
     }
 
-    # A folder's count/size/cost, summed from its member sessions' payloads at
-    # ask time (issue #60): nothing is stored, so a move, forget or freshen
-    # cannot leave a heading's totals behind. shown=1 narrows the COUNT to the
+    # A folder's count/size/cost, summed from its own sessions' payloads at ask
+    # time (issue #60), the folders beneath it not counted: nothing is stored,
+    # so a move, forget or freshen cannot leave a heading's totals behind. shown=1 narrows the COUNT to the
     # rows no list-view toggle is hiding; money and bytes always sum every
     # stored member, hidden included, so the heading answers what the project
     # spent in the window whatever the view is showing.
