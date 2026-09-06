@@ -83,10 +83,13 @@ proc ::questlog::cli::main::format_secs {secs} {
 # a reader meets a total at the moment they need to distrust it: human_secs and
 # duration_secs are scalars per session, so two terminals running at once sum to
 # twice the wall clock, and a whole-session figure credits the whole session to
-# whatever the query asked about.
+# whatever the query asked about. A subagent's run is the one overlap the sum
+# does know about, and says so: it lies inside a Task bracket its parent's
+# figures already cover.
 namespace eval ::questlog::cli::main {
     variable TimeCaveat "whole-session wall clock: concurrent sessions double\
-count, and a session that only partly concerned the query counts whole"
+count, a subagent's time is its parent's and is not added again, and a session\
+that only partly concerned the query counts whole"
 }
 
 proc ::questlog::cli::main::totals_zero {} {
@@ -108,15 +111,19 @@ proc ::questlog::cli::main::local_day {ts} {
 # Fold one session's or subagent's cost dict into an accumulator. kind is the
 # count it lands in (sessions or subagents); ts is the session's first
 # timestamp, which only a parent session carries, so the span and the day set
-# count sessions rather than transcripts. The cost sentinel (-1.0, no rate
-# matched) adds nothing to cost. The one contribution is built as an
-# accumulator of its own and merged, so widening a
-# span is written once, in totals_merge.
+# count sessions rather than transcripts. A subagent adds its turns, tokens
+# and cost but no time: it runs inside a Task bracket of its parent, whose
+# duration_secs already covers that clock, and its own transcript holds no
+# human turn to time (the rule the session list's recompute_parent_totals
+# keeps for a row). The cost sentinel (-1.0, no rate matched) adds nothing to
+# cost. The one contribution is built as an accumulator of its own and merged,
+# so widening a span is written once, in totals_merge.
 proc ::questlog::cli::main::totals_add {tot ci kind {ts ""}} {
     set one [totals_zero]
     dict incr one $kind
-    foreach f {turns input_tokens output_tokens cache_write_tokens \
-               cache_read_tokens duration_secs human_secs} {
+    set fields {turns input_tokens output_tokens cache_write_tokens cache_read_tokens}
+    if {$kind eq "sessions"} { lappend fields duration_secs human_secs }
+    foreach f $fields {
         set v [dict getdef $ci $f 0]
         if {[string is integer -strict $v]} { dict incr one $f $v }
     }

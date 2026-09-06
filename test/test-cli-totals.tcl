@@ -63,8 +63,11 @@ check "totals_add: a session counts as one session" [dict get $t sessions] 1
 check "totals_add: a subagent counts apart from its session" [dict get $t subagents] 1
 check "totals_add: turns sum across both kinds" [dict get $t turns] 6
 check "totals_add: cost sums" [format %.2f [dict get $t cost_usd]] 0.35
-check "totals_add: machine time sums" [dict get $t duration_secs] 660
-check "totals_add: human time sums" [dict get $t human_secs] 120
+# A subagent runs inside its parent's Task bracket, which the parent's machine
+# time already covers, so its own duration is not added again.
+check "totals_add: machine time is the sessions' alone" [dict get $t duration_secs] 600
+check "totals_add: human time is the sessions' alone" \
+    [dict get [::questlog::cli::main::totals_add $t [ci 0.10 2 60 45] subagents] human_secs] 120
 check "totals_add: tokens sum" [dict get $t input_tokens] 100
 check "totals_add: the span opens at the first session" \
     [dict get $t first_ts] 2026-06-20T10:00:00.000Z
@@ -123,6 +126,7 @@ check "format_totals_json: the span rides as the ISO stamps --json speaks" \
     [dict get $jd last_ts] 2026-06-25T15:00:00.000Z
 check "format_totals_json: the time caveat travels with the figures" \
     [expr {[string match "*double count*" [dict get $jd time_basis]]
+        && [string match "*subagent*" [dict get $jd time_basis]]
         && [string match "*counts whole*" [dict get $jd time_basis]]}] 1
 
 set line [::questlog::cli::main::totals_line $m]
@@ -197,6 +201,12 @@ write_session [file join $CORPUS -home-test-code-proj \
         11111111-1111-1111-1111-111111111111.jsonl] [list \
     "{\"type\":\"user\",\"cwd\":\"/home/test/code/proj\",\"timestamp\":\"2026-06-20T10:00:00.000Z\",\"message\":{\"content\":\"shibboleth open\"}}" \
     "{\"type\":\"assistant\",\"timestamp\":\"2026-06-20T10:04:00.000Z\",\"message\":{$usage,\"content\":\"shibboleth one\"}}"]
+# A subagent under the first session, run inside its parent's four minutes:
+# it counts as a subagent session and adds no time.
+write_session [file join $CORPUS -home-test-code-proj \
+        11111111-1111-1111-1111-111111111111 subagents agent-a1.jsonl] [list \
+    "{\"type\":\"user\",\"cwd\":\"/home/test/code/proj\",\"timestamp\":\"2026-06-20T10:01:00.000Z\",\"message\":{\"content\":\"scout\"}}" \
+    "{\"type\":\"assistant\",\"timestamp\":\"2026-06-20T10:03:00.000Z\",\"message\":{$usage,\"content\":\"found\"}}"]
 write_session [file join $CORPUS -home-test-code-other \
         22222222-2222-2222-2222-222222222222.jsonl] [list \
     "{\"type\":\"user\",\"cwd\":\"/home/test/code/other\",\"timestamp\":\"2026-06-22T09:00:00.000Z\",\"message\":{\"content\":\"shibboleth open\"}}" \
@@ -218,7 +228,9 @@ check "cli --shortstat: the span covers both" \
     [regexp -- {(?m)^first session      2026-06-20\nlast session       2026-06-22$} $sstat] 1
 check "cli --shortstat: two days hold a session" \
     [regexp -- {(?m)^days with sessions 2$} $sstat] 1
-check "cli --shortstat: machine time is the sum of both sessions" \
+check "cli --shortstat: the subagent is counted" \
+    [regexp -- {(?m)^subagent sessions  1$} $sstat] 1
+check "cli --shortstat: machine time is the sum of both sessions, the subagent's inside" \
     [regexp -- {(?m)^machine time       14:00$} $sstat] 1
 check "cli --shortstat: both folders appear in the breakdown" \
     [expr {[regexp -- {-home-test-code-proj} $sstat]
