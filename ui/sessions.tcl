@@ -2049,6 +2049,10 @@ oo::class create ::questlog::ui::SessionList {
     method subject_sort_id {} { return "path" }
     method default_sort_dir {id} { return [expr {$id eq "path" ? "asc" : "desc"}] }
 
+    # Rows stream in newest first, so under the date sort descending an arrival
+    # is already in place and the debounced resort can stay unarmed.
+    method arrival_in_order {key dir} { return [expr {$key eq "date" && $dir eq "desc"}] }
+
     # ---- base-class hook: the row subject (left side) --------------------
 
     # Build a node's subject: the left side per kind, ellipsised to fit before

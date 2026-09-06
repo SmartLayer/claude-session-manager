@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require leash
-package provide streamtree 0.6.0
+package provide streamtree 0.7.0
 
 namespace eval ::streamtree {}
 
@@ -41,7 +41,8 @@ namespace eval ::streamtree {}
 # The base class owns every text-mark mutation behind a treeview-style primitive
 # ensemble - insert/delete/detach/item/expand/collapse/hide/unhide/move/rebuild,
 # reveal and expand_subtree over a node's ancestors and descendants, the cursor
-# the keyboard walks (treeview's focus row), plus reset and a content door
+# the keyboard walks (treeview's focus row), batch to run many under one
+# anchoring, plus reset and a content door
 # (append_open/emit/emit_window/append_close, and drop_loose to lift a tagged
 # run of it back out) for loose in-row content that is not itself a node. A
 # subclass drives the widget only through these and never touches the text
@@ -59,6 +60,10 @@ namespace eval ::streamtree {}
 #     cell_values node           ordered {col value} pairs laid as cells ({})
 #     cell_tag node col          the tag names overlaid on that cell (empty for none)
 #     sort_key payload col       the sort value for a column, from a node's payload
+#     subject_sort_id            the column id a click on the subject header sorts by
+#                                ("": the subject does not sort)
+#     default_sort_dir id        the direction a freshly adopted sort starts in, asc or
+#                                desc (desc)
 #     apply_column_tabs tabs     set the right tab stops; the default sets them
 #                                widget-wide, a host whose row tags carry their own
 #                                -tabs configures those tags instead
@@ -78,6 +83,10 @@ namespace eval ::streamtree {}
 #     render_skip id             leave a node out of the view while keeping it in the store,
 #                                asked wherever a node is drawn with its content in place
 #     rebuild_restore anchor     re-pin the view to a {kind key} top node after a rebuild
+#     arrival_in_order key dir   whether a node streamed in, last among its siblings, is
+#                                already where sort key in direction dir (asc or desc)
+#                                puts it, so schedule_resort has nothing to do (the
+#                                default says no)
 #   Aggregation
 #     aggregate_seed             the value a subtree fold starts from
 #     aggregate_add acc id       that value with one node added into it; node_aggregate
@@ -203,9 +212,11 @@ oo::class create ::streamtree::StreamTree {
     variable ColHandles       ;# the visible vertical resize-handle rules over the header
     variable Opts             ;# widget options decoupling the base class from any host app
     variable SubjectMax       ;# px the subject may fill before the metadata block
-    variable FolderLabelMax   ;# px a root label may fill before its aggregates
+    variable FolderLabelMax   ;# px a root label may fill before the first tab stop
     variable LayoutW          ;# Text width the current layout was computed for
     variable RelayoutPending  ;# 1 while a debounced relayout is queued
+    variable BatchDepth       ;# how many batch brackets are open, 0 outside any
+    variable RebuildPending   ;# 1 while an open batch holds a move's rebuild for its end
     variable SortKey          ;# active sort column id
     variable SortDir          ;# desc | asc
     variable ResortTimer      ;# leash token of the debounced resort, or "" when none is pending
@@ -307,7 +318,8 @@ oo::class create ::streamtree::StreamTree {
     # escape their folder. Gated on the STREAMTREE_AUDIT env var so production
     # pays nothing; when on, it logs the first violation with the call chain
     # and latches off, naming the primitive that broke the contract. Every
-    # primitive calls this at its tail.
+    # primitive calls this at its tail, and each call walks the whole store:
+    # the drawn regions, and under every undrawn node its descendants.
     method check_invariant {where} {
         if {![info exists ::env(STREAMTREE_AUDIT)]} return
         if {[info exists ::STREAMTREE_AUDIT_TRIPPED]} return
@@ -523,6 +535,8 @@ oo::class create ::streamtree::StreamTree {
 
         $Text mark set TailMark "end-1c"
         $Text mark gravity TailMark right
+        set BatchDepth 0
+        set RebuildPending 0
     }
 
     # Text widget yview update: forward to the scrollbar, and edge-detect the
@@ -901,25 +915,26 @@ oo::class create ::streamtree::StreamTree {
         return [lmap e [lsort $mode -index 1 $dir $keyed] { lindex $e 0 }]
     }
 
-    method is_default_sort {} {
-        return [expr {$SortKey eq "date" && $SortDir eq "desc"}]
-    }
+    # Whether a node streamed in now, last among its siblings, already sits
+    # where the active sort puts it, so the arrival needs no resort. Which of
+    # a host's columns, if any, runs in arrival order is the host's to say:
+    # the default says none, and every arrival schedules the resort.
+    method arrival_in_order {key dir} { return 0 }
 
-    # A row streamed, or one whose sort value changed, lands out of order
-    # under a non-default sort.
-    # Debounce a single full re-render to restore the sort: each arrival resets
-    # the timer, so a metric flood resolves to one rebuild when arrivals pause,
-    # and the list stays still (in arrival order) while they stream. The default
-    # sort needs none (streaming order is already correct), so this no-ops then.
+    # A row streamed in lands last among its siblings, out of order under
+    # every sort but one the arrival_in_order hook vouches for. Debounce a
+    # single full re-render to restore the sort: each arrival resets the
+    # timer, so a flood resolves to one rebuild when arrivals pause, and the
+    # list stays still (in arrival order) while they stream.
     method schedule_resort {} {
-        if {[my is_default_sort]} return
+        if {[my arrival_in_order $SortKey $SortDir]} return
         if {$ResortTimer ne ""} { my forget $ResortTimer }
         set ResortTimer [my later [my opt resortdelay] \
             [list [self] do_resort]]
     }
     method do_resort {} {
         set ResortTimer ""
-        if {[my is_default_sort]} return
+        if {[my arrival_in_order $SortKey $SortDir]} return
         my rebuild
     }
     # Drop a pending debounced resort. Called before a synchronous rebuild
@@ -1138,14 +1153,22 @@ oo::class create ::streamtree::StreamTree {
 
     # Run a script with the widget editable and the view anchored once, restoring
     # the prior state after. A streaming flush brackets many inserts in one batch
-    # so the reader's scroll position is saved and restored a single time.
+    # so the reader's scroll position is saved and restored a single time. A
+    # rebuild a move asks for inside the batch waits for the outermost batch's
+    # end, so reparenting several nodes pays one. It runs once the anchors are
+    # restored, since a rebuild keeps the reader's view by its own means, and
+    # whether or not the script failed: the store has moved either way, and
+    # the view follows the store.
     method batch {script} {
         set st [$Text cget -state]
         $Text configure -state normal
         my anchor_save
+        incr BatchDepth
         set code [catch {uplevel 1 $script} res opts]
+        incr BatchDepth -1
         my anchor_restore
         $Text configure -state $st
+        if {$BatchDepth == 0 && $RebuildPending} { my rebuild }
         return -options $opts $res
     }
 
@@ -1155,10 +1178,10 @@ oo::class create ::streamtree::StreamTree {
     # nested row to its parent's append point). row_tags are the static style
     # tags every row of a kind carries. on_row_rendered runs after a row is laid
     # (bindings, nested content, selection). on_before_delete runs before a node
-    # leaves the store (drop domain indices and aggregates). populate runs at the
-    # top of expand, so a lazy host can enumerate and attach the node's children
-    # right before the base class draws them; a fully materialized tree leaves it
-    # as the no-op default.
+    # leaves the store (drop domain indices). populate runs at the top of
+    # expand, so a lazy host can enumerate and attach the node's children right
+    # before the base class draws them; a fully materialized tree leaves it as
+    # the no-op default.
     method start_gravity {kind} { return right }
     method row_tags {kind} { return [list] }
     method on_node_created {id} {}
@@ -1191,15 +1214,19 @@ oo::class create ::streamtree::StreamTree {
     # this and nothing else.
     method attr_value {node id} { return [my node_pget $node $id] }
 
-    # Lay a node's row at its parent's append point and register its marks: the
-    # one home for the right-gravity temp-mark insert and the ancestor-end
-    # advance. A left-gravity end mark stays left of an insert, so every
-    # ancestor whose end currently sits at the append point must be carried
-    # forward past the new row (an ancestor's end follows only its own last
-    # descendant down; a node in the middle relies on the insert shifting the
-    # lower end mark on its own). Both insert and expand/unhide route through
-    # here.
-    method render_row {id} {
+    # Lay a node's row and register its marks, at its parent's append point or,
+    # given a drawn sibling, before that sibling's row: the one home for the
+    # right-gravity temp-mark insert and the ancestor-end advance. A
+    # left-gravity end mark stays left of an insert, so every ancestor whose
+    # end currently sits at the append point must be carried forward past the
+    # new row (an ancestor's end follows only its own last descendant down; a
+    # node in the middle relies on the insert shifting the lower end mark on
+    # its own). Before a sibling, the only marks at the insert index are the
+    # sibling's start and the ends of what precedes it, an ancestor's end
+    # lying past every descendant's; the ends keep left of the new row on
+    # their gravity and the sibling's start is re-seated past it whatever its
+    # own. insert, expand and unhide all route through here.
+    method render_row {id {before ""}} {
         # Editable on entry, as the primitives are: a host's own draw helper
         # reaches render_row outside any primitive, and an insert against a
         # disabled widget is dropped silently, leaving a zero-length row whose
@@ -1208,7 +1235,9 @@ oo::class create ::streamtree::StreamTree {
         $Text configure -state normal
         set parent [my node_field $id parent]
         set kind   [my node_field $id kind]
-        if {$parent eq ""} {
+        if {$before ne ""} {
+            set ins [my node_field $before start]
+        } elseif {$parent eq ""} {
             # A root appends after every existing one, so its append point is the
             # true buffer end by definition: re-anchor TailMark there rather than
             # trust a value an upstream op may have drifted into a folder body.
@@ -1234,6 +1263,7 @@ oo::class create ::streamtree::StreamTree {
         my apply_line $id $rstart $info
         set rowend [$Text index $tmp]
         $Text mark unset $tmp
+        if {$before ne ""} { $Text mark set [my node_field $before start] $rowend }
         set sm "${id}_s"
         $Text mark set $sm $rstart
         $Text mark gravity $sm [my start_gravity $kind]
@@ -1291,8 +1321,10 @@ oo::class create ::streamtree::StreamTree {
     }
 
     # insert: add a node and draw it when it has a place in the view. parent ""
-    # makes a root. -pos {before <id>} orders it before a sibling, else it
-    # appends.
+    # makes a root. -pos {before <id>} seats it before that sibling in the
+    # store and, when the node draws, in the view: its row goes before the
+    # first drawn sibling from there on, so a hidden one between is stepped
+    # over. A sibling not found, or no -pos, appends.
     method insert {parent kind key payload args} {
         set before ""
         foreach {opt val} $args {
@@ -1301,29 +1333,32 @@ oo::class create ::streamtree::StreamTree {
         set st [$Text cget -state]
         $Text configure -state normal
         set id [my node_new $kind $parent $key $payload]
-        if {$parent eq ""} {
-            if {$before ne ""} {
-                set i [lsearch -exact $Roots $before]
-                set Roots [linsert $Roots [expr {$i < 0 ? "end" : $i}] $id]
-            } else {
+        # at: the drawn sibling the row goes before, or "" for the append
+        # point. The append leaves Roots unshared, so a bulk load of roots
+        # stays linear; the seated insert copies the siblings it searches.
+        set at ""
+        if {$before eq ""} {
+            if {$parent eq ""} {
                 lappend Roots $id
+            } else {
+                my node_set $parent children [list {*}[my node_field $parent children] $id]
             }
         } else {
-            set kids [my node_field $parent children]
-            if {$before ne ""} {
-                set i [lsearch -exact $kids $before]
-                set kids [linsert $kids [expr {$i < 0 ? "end" : $i}] $id]
-            } else {
-                lappend kids $id
+            if {$parent eq ""} { set kids $Roots } else { set kids [my node_field $parent children] }
+            set i [lsearch -exact $kids $before]
+            if {$i < 0} { set i [llength $kids] }
+            set kids [linsert $kids $i $id]
+            if {$parent eq ""} { set Roots $kids } else { my node_set $parent children $kids }
+            foreach s [lrange $kids [expr {$i + 1}] end] {
+                if {[my node_field $s rendered]} { set at $s; break }
             }
-            my node_set $parent children $kids
         }
         # Let the subclass register its domain indices for this node before the
         # row renders: render_subject may read the node back through an index
         # (a container's row counting its children through a key->id map), so
         # the index must exist by the time render_row builds the line.
         my on_node_created $id
-        if {[my placed $id]} { my render_row $id }
+        if {[my placed $id]} { my render_row $id $at }
         $Text configure -state $st
         my check_invariant insert
         return $id
@@ -1506,16 +1541,23 @@ oo::class create ::streamtree::StreamTree {
         foreach c [my node_field $id children] { my open_below $c }
     }
 
-    # move: reparent a node, then rebuild. A move can re-key the node and folder
-    # regions are disjoint down the buffer, so an in-place splice is not honest;
-    # a rebuild keeps the mark scheme consistent and moves are rare.
+    # move: reparent a node, then rebuild; "" as the new parent makes it a
+    # root. A move can re-key the node and folder regions are disjoint down
+    # the buffer, so an in-place splice is not honest: the node's rows leave
+    # the view with the reparenting, and the rebuild draws them in their place.
+    # Inside a batch the rebuild waits for the batch's end and runs once for
+    # all the moves in it; outside, it runs now.
     method move {id newparent args} {
+        my detach $id
         my detach_child $id
         my node_set $id parent $newparent
-        set kids [my node_field $newparent children]
-        lappend kids $id
-        my node_set $newparent children $kids
-        my rebuild
+        if {$newparent eq ""} {
+            lappend Roots $id
+        } else {
+            my node_set $newparent children [list {*}[my node_field $newparent children] $id]
+        }
+        if {$BatchDepth > 0} { set RebuildPending 1 } else { my rebuild }
+        my check_invariant move
     }
 
     # rebuild: re-render the whole list from the durable store, preserving the
@@ -1527,6 +1569,7 @@ oo::class create ::streamtree::StreamTree {
     # display order, so a sort reorders Roots and each node's children, not
     # just the painted sequence.
     method rebuild {} {
+        set RebuildPending 0
         set st [$Text cget -state]
         $Text configure -state normal
         set at_top [expr {[lindex [$Text yview] 0] <= 0.0001}]
