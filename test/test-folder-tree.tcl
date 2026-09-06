@@ -175,6 +175,14 @@ update
 check "reopening the parent draws the nested folder open" \
     [lsearch [drawn] session:harvest-1.jsonl] 2
 
+# A width change re-pins the metadata stops on the kind tags; a nested row's
+# title stop rides its own tag and has to follow them.
+set stag [$SL node_field [$SL sid $S_HARVEST] tag]
+$TX configure -width [expr {[$TX cget -width] + 30}]
+update
+check "a nested row's stops follow the columns after a resize" \
+    [lrange [$TX tag cget $stag -tabs] 2 end] [set ${ns}::ColTabs]
+
 # A sort rebuilds from the store: the folders stay a run above the sessions.
 $SL set_sort path
 update

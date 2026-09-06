@@ -726,13 +726,16 @@ oo::class create ::questlog::ui::SessionList {
     # Re-fit every rendered row's ellipsis after a width change (a base-class
     # hook, called from relayout inside the widget's normal state): each folder
     # heading, each rendered session header, and the children of an expanded
-    # session.
+    # session. A nested session's title stop rides its own tag (indent_tag)
+    # rather than the kind tag apply_column_tabs re-pinned, so it is re-pinned
+    # here beside the redraw.
     method relayout_content {} {
         foreach id [my all_rendered_nodes] {
             switch [my node_field $id kind] {
                 folder { my redraw_folder_heading [my node_field $id key] }
                 session {
                     set path [my node_field $id key]
+                    my indent_tag $id [my node_field $id tag] sessionhead
                     my redraw_header $path
                     if {[my node_field $id expanded]} { my rerender_children $path }
                 }
