@@ -698,8 +698,11 @@ oo::class create ::questlog::ui::SessionList {
     # its rows under that. The kind tags (folderhead, sessionhead, snippet, ...)
     # carry absolute margins, and a Tk tag's margin replaces rather than adds,
     # so the shift rides the tag each row already wears alone (the node tag; a
-    # snippet's n#/c# tag), raised over the kind tag. The metadata stops are
-    # absolute and stay put; a session's title stop moves with its row.
+    # snippet's n#/c# tag). That tag outranks the kind tag by birth: a new
+    # tag takes the top priority, and every kind tag was created at build,
+    # before any row. A `tag raise` per row said the same thing and walked
+    # the tag table to say it, quadratic over a rebuild. The metadata stops
+    # are absolute and stay put; a session's title stop moves with its row.
 
     # Folders between a row's own folder and the root.
     method nesting {id} {
@@ -726,7 +729,6 @@ oo::class create ::questlog::ui::SessionList {
         if {$kindtag eq "sessionhead"} {
             $Text tag configure $tag -tabs [my session_tabs $ColTabs $px]
         }
-        $Text tag raise $tag $kindtag
     }
 
     # Re-fit every rendered row's ellipsis after a width change (a base-class
