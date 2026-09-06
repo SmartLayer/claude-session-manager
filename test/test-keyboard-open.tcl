@@ -55,7 +55,8 @@ proc openf {path lineno} { set ::opened [list $path $lineno] }
 set SL ""
 set ::Scan [::questlog::Scan new [list apply {{r} { $::SL on_scan_row $r }}] noop]
 proc scanpath {path} { return [$::Scan scan_path $path] }
-proc resolvef {f}    { return "/tmp/proj" }
+# A resume needs the project directory to exist; the sandbox stands in.
+proc resolvef {f}    { return $::SAND }
 proc subagentsf {path} { return [$::Scan subagents_for $path] }
 
 set SL [::questlog::ui::SessionList new .s resolvef openf noop noop noop noop noop \
@@ -105,7 +106,7 @@ $SL selection_set $s02
 clipboard clear
 clipboard append "sentinel"
 $SL copy_selected_resume
-set want [::questlog::ui::terminal::resume_command /tmp/proj [file rootname [file tail $s02]]]
+set want [::questlog::ui::terminal::resume_command $SAND [file rootname [file tail $s02]]]
 check "copy_selected_resume puts the resume command on the clipboard" \
     [clipboard get] $want
 
