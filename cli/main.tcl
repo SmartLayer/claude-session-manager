@@ -92,7 +92,7 @@ count, and a session that only partly concerned the query counts whole"
 proc ::questlog::cli::main::totals_zero {} {
     return [dict create sessions 0 subagents 0 turns 0 \
         input_tokens 0 output_tokens 0 cache_write_tokens 0 cache_read_tokens 0 \
-        cost 0.0 duration_secs 0 human_secs 0 first_ts "" last_ts "" days {}]
+        cost_usd 0.0 duration_secs 0 human_secs 0 first_ts "" last_ts "" days {}]
 }
 
 # The calendar day an ISO transcript timestamp fell on, in the reader's own
@@ -121,7 +121,7 @@ proc ::questlog::cli::main::totals_add {tot ci kind {ts ""}} {
         if {[string is integer -strict $v]} { dict incr one $f $v }
     }
     set c [dict getdef $ci cost_usd ""]
-    if {[string is double -strict $c] && $c > 0} { dict set one cost $c }
+    if {[string is double -strict $c] && $c > 0} { dict set one cost_usd $c }
     if {[set day [local_day $ts]] ne ""} {
         dict set one days $day 1
         dict set one first_ts $ts
@@ -138,7 +138,7 @@ proc ::questlog::cli::main::totals_merge {a b} {
                cache_write_tokens cache_read_tokens duration_secs human_secs} {
         dict incr a $f [dict get $b $f]
     }
-    dict set a cost [expr {[dict get $a cost] + [dict get $b cost]}]
+    dict set a cost_usd [expr {[dict get $a cost_usd] + [dict get $b cost_usd]}]
     dict for {d _} [dict get $b days] { dict set a days $d 1 }
     set bf [dict get $b first_ts]
     if {$bf ne "" && ([dict get $a first_ts] eq ""
@@ -159,7 +159,7 @@ proc ::questlog::cli::main::format_totals_json {tot} {
         [dict get $tot sessions] [dict get $tot subagents] [dict get $tot turns] \
         [dict get $tot input_tokens] [dict get $tot output_tokens] \
         [dict get $tot cache_write_tokens] [dict get $tot cache_read_tokens] \
-        [dict get $tot cost] [dict get $tot human_secs] [dict get $tot duration_secs] \
+        [dict get $tot cost_usd] [dict get $tot human_secs] [dict get $tot duration_secs] \
         [escape_json [dict get $tot first_ts]] [escape_json [dict get $tot last_ts]] \
         [dict size [dict get $tot days]] [escape_json $::questlog::cli::main::TimeCaveat]]
 }
@@ -176,7 +176,7 @@ proc ::questlog::cli::main::totals_line {tot} {
     lappend parts [count_label [dict get $tot turns] turn] \
         "human [::questlog::cost::fmt_dur [dict get $tot human_secs]]" \
         "machine [::questlog::cost::fmt_dur [dict get $tot duration_secs]]" \
-        [format {$%.2f} [dict get $tot cost]]
+        [format {$%.2f} [dict get $tot cost_usd]]
     set lo [local_day [dict get $tot first_ts]]
     set hi [local_day [dict get $tot last_ts]]
     if {$lo ne ""} { lappend parts [expr {$lo eq $hi ? $lo : "$lo to $hi"}] }
@@ -259,7 +259,7 @@ proc ::questlog::cli::main::format_shortstat {stats limit {folders {}}} {
     lappend lines [format "output tokens      %s"    [dict get $stats output_tokens]]
     lappend lines [format "cache write tokens %s"    [dict get $stats cache_write_tokens]]
     lappend lines [format "cache read tokens  %s"    [dict get $stats cache_read_tokens]]
-    lappend lines [format "total cost         \$%.2f" [dict get $stats cost]]
+    lappend lines [format "total cost         \$%.2f" [dict get $stats cost_usd]]
     lappend lines [format "human time         %s"    [::questlog::cost::fmt_dur [dict get $stats human_secs]]]
     lappend lines [format "machine time       %s"    [::questlog::cost::fmt_dur [dict get $stats duration_secs]]]
     lappend lines [format "first session      %s"    [local_day [dict get $stats first_ts]]]
@@ -888,7 +888,7 @@ proc ::questlog::cli::main::run {q} {
         dict set output_folders $folder totals $ftot
         set path [dict get $output_folders $folder project_path]
         lappend breakdown [list [expr {$path ne "" ? $path : $folder}] $ftot \
-            [dict get $ftot cost]]
+            [dict get $ftot cost_usd]]
     }
 
     # Emit the result in the requested mode.

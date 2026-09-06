@@ -54,7 +54,7 @@ check "local_day: an unparseable stamp is no day" \
 
 set z [::questlog::cli::main::totals_zero]
 check "totals_zero: nothing counted" \
-    [list [dict get $z sessions] [dict get $z cost] [dict get $z first_ts]] {0 0.0 {}}
+    [list [dict get $z sessions] [dict get $z cost_usd] [dict get $z first_ts]] {0 0.0 {}}
 
 set t [::questlog::cli::main::totals_add $z [ci 0.25 4 600 120 100 50] \
     sessions 2026-06-20T10:00:00.000Z]
@@ -62,7 +62,7 @@ set t [::questlog::cli::main::totals_add $t [ci 0.10 2 60 0] subagents]
 check "totals_add: a session counts as one session" [dict get $t sessions] 1
 check "totals_add: a subagent counts apart from its session" [dict get $t subagents] 1
 check "totals_add: turns sum across both kinds" [dict get $t turns] 6
-check "totals_add: cost sums" [format %.2f [dict get $t cost]] 0.35
+check "totals_add: cost sums" [format %.2f [dict get $t cost_usd]] 0.35
 check "totals_add: machine time sums" [dict get $t duration_secs] 660
 check "totals_add: human time sums" [dict get $t human_secs] 120
 check "totals_add: tokens sum" [dict get $t input_tokens] 100
@@ -75,7 +75,7 @@ check "totals_add: a subagent carries no stamp, so the day set counts sessions" 
 # shortstat total has always had it, but its turns and time still count.
 set u [::questlog::cli::main::totals_add $z [ci -1.0 3 300 60] sessions \
     2026-06-21T10:00:00.000Z]
-check "totals_add: the -1.0 cost sentinel adds nothing to cost" [dict get $u cost] 0.0
+check "totals_add: the -1.0 cost sentinel adds nothing to cost" [dict get $u cost_usd] 0.0
 check "totals_add: an unpriced session still counts its turns" [dict get $u turns] 3
 
 # Two sessions on one day are one day; an earlier arrival widens the span open.
@@ -100,7 +100,7 @@ set b [::questlog::cli::main::totals_add $b [ci 3.0 1 100 50] sessions \
     2026-06-25T15:00:00.000Z]
 set m [::questlog::cli::main::totals_merge $a $b]
 check "totals_merge: sessions add" [dict get $m sessions] 3
-check "totals_merge: cost adds" [format %.2f [dict get $m cost]] 6.00
+check "totals_merge: cost adds" [format %.2f [dict get $m cost_usd]] 6.00
 check "totals_merge: human time adds" [dict get $m human_secs] 750
 check "totals_merge: a day two folders share counts once" \
     [dict size [dict get $m days]] 2
@@ -134,8 +134,8 @@ check "totals_line: a single-day result prints the day once, and counts singly" 
 
 # --shortstat: the whole, its caveat, then the folders dearest first.
 set ss [::questlog::cli::main::format_shortstat $m 0 \
-    [list [list /home/user/cheap $a [dict get $a cost]] \
-          [list /home/user/dear $b [dict get $b cost]]]]
+    [list [list /home/user/cheap $a [dict get $a cost_usd]] \
+          [list /home/user/dear $b [dict get $b cost_usd]]]]
 check "shortstat: human time is named and formatted" \
     [regexp -- {(?m)^human time         12:30$} $ss] 1
 check "shortstat: machine time is named and formatted" \
@@ -150,7 +150,7 @@ check "shortstat: the folder breakdown leads with the dearest" \
     [regexp -- {(?s)/home/user/dear.*/home/user/cheap} $ss] 1
 check "shortstat: one folder needs no breakdown of itself" \
     [regexp -- {by folder} [::questlog::cli::main::format_shortstat $m 0 \
-        [list [list /home/user/only $a [dict get $a cost]]]]] 0
+        [list [list /home/user/only $a [dict get $a cost_usd]]]]] 0
 check "shortstat: a limit still names itself" \
     [regexp -- {limit applied} [::questlog::cli::main::format_shortstat $m 5 {}]] 1
 
