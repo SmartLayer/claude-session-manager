@@ -2513,9 +2513,13 @@ oo::class create ::questlog::ui::SessionList {
         return $out
     }
 
-    # Every folder in the store in display order, parents before children,
-    # each as {key dir label depth}: the destinations the move picker lists,
-    # labelled and stepped in as their headings are.
+    # The destinations the move picker lists, each as {key dir label depth}:
+    # every folder in the store in display order, parents before children,
+    # labelled and stepped in as their headings are, then flat beneath them
+    # the projects on disk the store holds no session of (outside the since
+    # or subtree bound), labelled by their absolute path, so a session can
+    # move to a project the list is not showing. A folder the resolver cannot
+    # place is left out; one whose directory is gone the picker leaves out.
     method folder_roster {} {
         set out [list]
         foreach rid [my roots] {
@@ -2526,7 +2530,15 @@ oo::class create ::questlog::ui::SessionList {
                     depth [my nesting $id]]
             }
         }
-        return $out
+        set rest [list]
+        foreach folder [::questlog::path::list_all_projects] {
+            if {[my has_folder $folder]} continue
+            set cwd [{*}$ResolveFolder $folder]
+            if {$cwd eq ""} continue
+            lappend rest [dict create key $folder dir [file normalize $cwd] \
+                label [::questlog::path::pretty_home $cwd] depth 0]
+        }
+        return [concat $out [lsort -dictionary -index 5 $rest]]
     }
 
     # True while a filter is narrowing the view, so some loaded sessions may be

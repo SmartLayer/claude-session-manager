@@ -4,13 +4,17 @@
 # depth. The source folder is left out and the folders beneath it kept, since
 # a session can move down into its own project; a folder with no directory to
 # move into (gone) is left out. With no single source (a group move) every
-# folder is offered.
+# folder is offered. Beneath the tree, flat, sit the projects on disk the
+# list is not showing (outside its since bound), labelled by their path.
 #
 # The corpus, under a sandbox $HOME (every name fictional):
 #   ~/proj/forge            a session; the root
 #   ~/proj/forge/bellows    nested, a session
 #   ~/proj/forge/slag       nested, a session, the directory gone
 #   ~/proj/anvil            an unrelated root
+#   ~/proj/quench           a session outside the since bound, so no row
+#   ~/proj/cinder           the same, its directory gone: the walk-only
+#                           resolver cannot place it, so the roster leaves it out
 
 package require Tcl 9
 package require Tk
@@ -56,11 +60,15 @@ set FORGE   [file join $SAND proj forge]
 set BELLOWS [file join $FORGE bellows]
 set SLAG    [file join $FORGE slag]
 set ANVIL   [file join $SAND proj anvil]
+set QUENCH  [file join $SAND proj quench]
+set CINDER  [file join $SAND proj cinder]
 write_session $FORGE   forge-1   1
 write_session $BELLOWS bellows-1 2
 write_session $SLAG    slag-1    3 0
 write_session $ANVIL   anvil-1   4
-foreach v {FORGE BELLOWS SLAG ANVIL} { set F_$v [::questlog::path::encode_cwd [set $v]] }
+write_session $QUENCH  quench-1  60
+write_session $CINDER  cinder-1  60 0
+foreach v {FORGE BELLOWS SLAG ANVIL QUENCH CINDER} { set F_$v [::questlog::path::encode_cwd [set $v]] }
 
 set SL ""
 set ::Scan [::questlog::Scan new [list apply {{r} { $::SL on_scan_row $r }}] noop {} {} {} 0]
@@ -97,18 +105,19 @@ update
 
 # ---- the roster: the tree's folders, parents first, with label and depth ----
 set roster [$SL folder_roster]
-check "the roster walks the tree parents first" \
-    [lmap f $roster { dict get $f key }] [list $F_FORGE $F_BELLOWS $F_SLAG $F_ANVIL]
-check "each folder carries its heading's label and its depth" \
+check "the roster walks the tree parents first, then the projects the list is not showing" \
+    [lmap f $roster { dict get $f key }] \
+    [list $F_FORGE $F_BELLOWS $F_SLAG $F_ANVIL $F_QUENCH]
+check "each folder carries its heading's label and its depth; a project outside the tree its path, flat" \
     [lmap f $roster { list [dict get $f label] [dict get $f depth] }] \
-    [list {~/proj/forge 0} {bellows 1} {slag 1} {~/proj/anvil 0}]
+    [list {~/proj/forge 0} {bellows 1} {slag 1} {~/proj/anvil 0} {~/proj/quench 0}]
 
 # ---- one session moving out of the root ------------------------------------
 ::questlog::ui::move_dialog::open . 1 $F_FORGE $roster noop ""
 update
-check "the source folder is left out, its descendants kept, the gone one skipped, stepped in by depth" \
-    [picker_rows] [list "    bellows" "~/proj/anvil"]
-check "each row stands for its folder's directory" [picker_dirs] [list $BELLOWS $ANVIL]
+check "the source folder is left out, its descendants kept, the gone ones skipped, the unshown project beneath" \
+    [picker_rows] [list "    bellows" "~/proj/anvil" "~/proj/quench"]
+check "each row stands for its folder's directory" [picker_dirs] [list $BELLOWS $ANVIL $QUENCH]
 ::questlog::ui::move_dialog::cancel
 update
 
@@ -116,7 +125,7 @@ update
 ::questlog::ui::move_dialog::open . 2 "" $roster noop ""
 update
 check "with no single source every living folder is offered" \
-    [picker_rows] [list "~/proj/forge" "    bellows" "~/proj/anvil"]
+    [picker_rows] [list "~/proj/forge" "    bellows" "~/proj/anvil" "~/proj/quench"]
 ::questlog::ui::move_dialog::cancel
 update
 

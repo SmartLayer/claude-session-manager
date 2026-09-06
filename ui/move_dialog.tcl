@@ -144,14 +144,16 @@ proc ::questlog::ui::move_dialog::populate {} {
     variable CurrentFolder
     variable Folders
     variable RowToCwd
-    # One row per folder of the list's tree, in the tree's order, stepped in
-    # to its depth and labelled as its heading is, so the picker reads as the
-    # list does. The source folder is left out; the folders beneath it stay,
-    # since a session can move down into its own project. A folder with no
-    # directory to move into (one the resolver could not place, or whose
-    # directory is gone) is left out too: moving into it would point a resume
-    # command at nothing. The directory is checked on disk here rather than
-    # trusted from the heading, which the list draws from a cache.
+    # One row per folder of the roster, in its order: the list's tree, each
+    # stepped in to its depth and labelled as its heading is, so the picker
+    # reads as the list does, then the projects on disk the list is not
+    # showing, flat beneath. The source folder is left out; the folders
+    # beneath it stay, since a session can move down into its own project. A
+    # folder with no directory to move into (one the resolver could not
+    # place, or whose directory is gone) is left out too: moving into it
+    # would point a resume command at nothing. The directory is checked on
+    # disk here rather than trusted from the heading, which the list draws
+    # from a cache.
     set seq 0
     foreach f $Folders {
         if {[dict get $f key] eq $CurrentFolder} continue
