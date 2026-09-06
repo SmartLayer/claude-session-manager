@@ -176,7 +176,10 @@ check "markdown: the caveat closes the document once" \
 
 # ---- end to end: the real CLI over a fixture corpus ------------------------
 
-set TMP /tmp/questlog-totals-test
+# The corpus is per-process: two runs of this file at once (two suite runs on
+# one host) would otherwise share the directory, and the first to finish
+# deletes it under the second.
+set TMP /tmp/questlog-totals-test-[pid]
 set CORPUS [file join $TMP .claude projects]
 set ::env(HOME) $TMP
 unset -nocomplain ::env(CLAUDE_CONFIG_DIR)
