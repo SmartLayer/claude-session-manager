@@ -2307,13 +2307,21 @@ oo::class create ::questlog::ui::SessionList {
             append count_str [expr {$total > $n ? " ($n of $total)" : " ($n)"}]
         }
         # Marker joined to the label by a space; the label is truncated so it
-        # never runs into the right-pinned aggregates.
+        # never runs into the right-pinned aggregates. Everything before the
+        # first tab stop is the marker, the label, the count and the indent, and
+        # a pixel past that stop puts the whole strip of aggregates on the next
+        # one, a column right of the rows'. The budget is that stop rather than
+        # FolderLabelMax, which floors at 60px and a narrow pane can carry past
+        # it. With nothing left for a label the count keeps the strip in place
+        # on its own, so the joining space goes with the label.
         set fixed [expr {[font measure QLList "$marker "] \
                          + [font measure QLList $count_str] \
                          + [my indent_px $node]}]
+        set stop [expr {[llength $ColTabs] ? [lindex $ColTabs 0] - 16 \
+                                           : $FolderLabelMax}]
         set full [my folder_label $node]
-        set label [my truncate_px $full \
-                       [expr {$FolderLabelMax - $fixed}] QLList]
+        set label [my truncate_px $full [expr {$stop - $fixed}] QLList]
+        set gap [expr {$label eq "" ? "" : " "}]
         set tags [list [list foldchevron 0 1]]
         # A project path is long and cut from the front of the aggregates, so a
         # deep folder shows its head and hides the leaf that names it. The cut
@@ -2321,13 +2329,20 @@ oo::class create ::questlog::ui::SessionList {
         # counts beside it say all they have to say. The heading has no <Enter>
         # of its own, so the reveal leaves the cursor alone rather than promising
         # a hand the row never showed before.
+        # A pane too narrow for one letter of label leaves the heading nameless,
+        # so there the reveal takes the whole line instead of the label run.
         if {$label ne $full} {
             set ntag "t#$node"
-            lappend tags [list $ntag [string length "$marker "] \
-                              [string length $label]]
+            if {$label eq ""} {
+                lappend tags [list $ntag 0 \
+                                  [string length "$marker$gap$label$count_str"]]
+            } else {
+                lappend tags [list $ntag [string length "$marker$gap"] \
+                                  [string length $label]]
+            }
             my peek_wire $ntag $full "" 0
         }
-        return [dict create subject "$marker $label$count_str" \
+        return [dict create subject "$marker$gap$label$count_str" \
                     tags $tags meta_run 0]
     }
 

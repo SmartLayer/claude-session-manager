@@ -166,9 +166,12 @@ check "an untrimmed row wires no reveal" [reveal_entry $res] ""
 # right-pinned aggregates. The heading carries the same reveal as a session row,
 # with the path as the whole of it: there is nothing under a folder's name to
 # show. A path that fits wires nothing.
+# A heading takes its budget from the first tab stop (the label lays no cell of
+# its own before it), less the 16px it is held short of, so the seam here is the
+# stop rather than the base class's FolderLabelMax.
 proc folder_at {folder cwd max} {
     set ns [info object namespace $::SL]
-    set ${ns}::FolderLabelMax $max
+    set ${ns}::ColTabs [lreplace [set ${ns}::ColTabs] 0 0 [expr {$max + 16}]]
     $::SL ensure_folder $folder $cwd
     return [$::SL folder_subject [$::SL fid $folder]]
 }
@@ -181,6 +184,32 @@ check "a folder reveal has nothing under the path" $rtext ""
 
 set res [folder_at "-short" /tmp/p 200]
 check "an untrimmed folder heading wires no reveal" [reveal_entry $res] ""
+
+# The count rides in front of the stop with the label, so the budget holds both:
+# a three-digit count under a narrow pane took the label's room and the heading
+# threw its aggregates onto the next stop, a column right of the rows'.
+# Synthetic children stand in for a scan; the fold counts session nodes off the
+# store.
+proc folder_with {folder cwd n max} {
+    folder_at $folder $cwd $max
+    # A narrow pane's shape: the base class floors FolderLabelMax at 60px, which
+    # leaves it past the stop, so a budget taken from it overruns.
+    set ns [info object namespace $::SL]
+    set ${ns}::FolderLabelMax [expr {$max * 4}]
+    set fid [$::SL fid $folder]
+    set kids [list]
+    for {set i 0} {$i < $n} {incr i} {
+        lappend kids [$::SL node_new session $fid $folder/$i [dict create size 1]]
+    }
+    $::SL node_set $fid children $kids
+    return [$::SL folder_subject $fid]
+}
+set res [folder_with "-many" /home/somebody/code/an-orchard-of-quilting-almanacs \
+             130 90]
+check "a heading with a three-digit count stays short of the stop" \
+    [expr {[font measure QLList [dict get $res subject]] <= 90 + 16}] 1
+check "and keeps the count it was cut for" \
+    [regexp {\(130\)$} [dict get $res subject]] 1
 
 ::questlog::path::_real_file delete -force $SAND
 if {$fails > 0} {
