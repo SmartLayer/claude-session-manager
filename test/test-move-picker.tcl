@@ -6,6 +6,8 @@
 # directory to move into (gone) is left out. With no single source (a group
 # move) every folder is offered. Beneath the roots, flat, sit the projects on
 # disk the list is not showing (outside its since bound), labelled by their
+# path. Browse opens at the source folder's directory unless a row is
+# selected or a path typed.
 #
 # The corpus, under a sandbox $HOME (every name fictional):
 #   ~/proj/forge            a session; the root
@@ -100,6 +102,9 @@ proc picker_items {{parent {}} {depth 0}} {
 proc picker_rows {} { return [lmap it [picker_items] { lindex $it 0 }] }
 proc picker_dirs {} { return [lmap it [picker_items] { lindex $it 1 }] }
 proc picker_open {} { return [lmap it [picker_items] { lindex $it 2 }] }
+# The directory Browse hands the chooser, without opening one.
+rename tk_chooseDirectory {}
+proc tk_chooseDirectory {args} { set ::browse_start [dict get $args -initialdir]; return "" }
 
 $SL apply_filter [dict create since 30d]
 set ::scan_done 0
@@ -123,6 +128,12 @@ update
 check "the source folder is left out, its descendants hung above, the gone ones skipped, the unshown project beneath" \
     [picker_rows] [list "bellows" "~/proj/anvil" "~/proj/quench"]
 check "each item stands for its folder's directory" [picker_dirs] [list $BELLOWS $ANVIL $QUENCH]
+::questlog::ui::move_dialog::browse
+check "Browse opens at the source folder's directory" $::browse_start $FORGE
+$::questlog::ui::move_dialog::Tv selection set [lindex [$::questlog::ui::move_dialog::Tv children {}] 1]
+update
+::questlog::ui::move_dialog::browse
+check "Browse opens at the selected item's directory once one is selected" $::browse_start $ANVIL
 ::questlog::ui::move_dialog::cancel
 update
 
@@ -132,6 +143,8 @@ update
 check "with no single source every living folder is offered, nested under its parent" \
     [picker_rows] [list "~/proj/forge" ">bellows" "~/proj/anvil" "~/proj/quench"]
 check "every branch is open" [picker_open] {1 1 1 1}
+::questlog::ui::move_dialog::browse
+check "Browse opens at home when there is no source and no selection" $::browse_start [file home]
 ::questlog::ui::move_dialog::cancel
 update
 

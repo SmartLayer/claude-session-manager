@@ -18,6 +18,7 @@ namespace eval ::questlog::ui::move_dialog {
     variable CurrentFolder ""
     variable Folders {}       ;# the list's folder roster: {key dir label parent} each
     variable OnDone ""
+    variable SourceDir ""     ;# the source folder's directory, where Browse starts
     variable LiveCb ""        ;# cb: () -> display names of selected sessions
                               ;# that are live right now (empty = none)
     variable LivePoll ""      ;# after-id of the live-state recheck, or ""
@@ -140,6 +141,7 @@ proc ::questlog::ui::move_dialog::populate {} {
     variable Tv
     variable CurrentFolder
     variable Folders
+    variable SourceDir
     # One item per folder of the roster, in its order, under its parent's
     # item and labelled as its heading is, every branch open, so the picker
     # reads as the list does; the projects on disk the list is not showing
@@ -153,10 +155,11 @@ proc ::questlog::ui::move_dialog::populate {} {
     # from the heading, which the list draws from a cache.
     set iids [dict create]
     set parents [dict create]
+    set SourceDir ""
     foreach f $Folders {
         set key [dict get $f key]
         dict set parents $key [dict get $f parent]
-        if {$key eq $CurrentFolder} continue
+        if {$key eq $CurrentFolder} { set SourceDir [dict get $f dir]; continue }
         set cwd [dict get $f dir]
         if {![file isdirectory $cwd]} continue
         set p [dict get $f parent]
@@ -168,12 +171,14 @@ proc ::questlog::ui::move_dialog::populate {} {
 
 # Pick a destination directory through the system folder chooser and
 # prefill the entry with it. The chooser opens at the currently-entered
-# directory when that is a real one (e.g. a list row was selected), else
-# at the home directory.
+# directory when that is a real one (a list row was selected, or a path
+# typed), else at the source folder's directory, else at the home directory.
 proc ::questlog::ui::move_dialog::browse {} {
     variable Top
     variable EntryVar
+    variable SourceDir
     set start [string trim $EntryVar]
+    if {![file isdirectory $start]} { set start $SourceDir }
     if {![file isdirectory $start]} { set start [file home] }
     set dir [tk_chooseDirectory -parent $Top -mustexist 1 \
                  -title "Choose destination directory" -initialdir $start]
