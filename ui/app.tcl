@@ -896,7 +896,10 @@ proc ::questlog::ui::app::flush_search {} {
 }
 
 # Order two buffered per-file entries by their folder, so a flush updates a
-# folder's sessions as one group.
+# folder's sessions as one group. An encoded name sorts before the names it
+# prefixes, so a parent's group lands before its children's when both are in
+# the buffer; the list needs no such order (ensure_folder hangs a late parent
+# over the children already there), it only saves it the re-hang.
 proc ::questlog::ui::app::cmp_search_folder {a b} {
     return [string compare \
         [dict get [lindex $a 0] folder] [dict get [lindex $b 0] folder]]

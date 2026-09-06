@@ -101,14 +101,16 @@ proc ::questlog::path::_encode_segment {name} {
     return [regsub -all {[^A-Za-z0-9]} $name -]
 }
 
-# Pick the user-facing label for a project folder: the resolved cwd,
-# abbreviated, when the folder could be resolved; otherwise the raw
-# basename, which is honest about the failure rather than a fictional
-# path. $cwd is whatever the canonical resolver returned ("" if it
-# could not resolve the folder).
-proc ::questlog::path::display_label {cwd folder_basename} {
+# The user-facing label for a project folder: its resolved cwd relative to
+# the cwd of the folder it sits under, or abbreviated and absolute when it
+# sits under none; otherwise the raw basename, which is honest about the
+# failure rather than a fictional path. $cwd is whatever the canonical
+# resolver returned ("" if it could not resolve the folder).
+proc ::questlog::path::display_label {cwd folder_basename {parent_cwd ""}} {
     if {$cwd eq ""} { return $folder_basename }
-    return [pretty_home $cwd]
+    if {$parent_cwd eq ""} { return [pretty_home $cwd] }
+    set pre [expr {$parent_cwd eq "/" ? "/" : "$parent_cwd/"}]
+    return [string range $cwd [string length $pre] end]
 }
 
 # All project folder basenames currently on disk under ~/.claude/projects/.

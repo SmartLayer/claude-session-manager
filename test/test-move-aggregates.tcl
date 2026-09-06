@@ -207,7 +207,7 @@ check "the child node left the old path"           [$SL has_session $child_old] 
 check "the folded-up child cost survived the move" \
     [expr {abs([$SL sget $pp_new cost] - $pcost0) < 1e-6}] 1
 check "new destination folder carries a real label, not empty" \
-    [expr {[$SL node_pget [$SL fid $FD] label] ne ""}] 1
+    [expr {[$SL folder_label [$SL fid $FD]] ne ""}] 1
 check "audit clean after a subagent move" [$SL audit] {}
 
 # --- A pinned session survives a move: the pin is keyed by the stable sid, which

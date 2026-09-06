@@ -4,7 +4,9 @@
 # folder whose directory cannot be resolved ("" from the resolver) must grey
 # it out like "Reveal folder" - the old gate checked only the callback's
 # presence, which in the wired app is always true, and the click then fell
-# into on_folder_bound's silent empty-cwd return.
+# into on_folder_bound's silent empty-cwd return. A folder whose directory is
+# gone resolves to the path it had: the search still bounds by it, the reveal
+# has nowhere to go.
 
 package require Tcl 9
 package require Tk
@@ -38,7 +40,7 @@ puts $fh {{"type":"user","cwd":"/tmp/proj","timestamp":"2026-06-10T17:00:00Z","m
 close $fh
 
 # The resolver's answer is the gate under test; flip it per call.
-set ::RESOLVED "/tmp/proj"
+set ::RESOLVED $SAND
 proc resolvef {f} { return $::RESOLVED }
 set SL ""
 set ::Scan [::questlog::Scan new [list apply {{r} { $::SL on_scan_row $r }}] noop]
@@ -81,6 +83,15 @@ update
 check "resolved: Search within this folder enabled" \
     [entry_state "Search within this folder"] normal
 check "resolved: Reveal folder enabled" [entry_state "Reveal folder"] normal
+[set [info object namespace $SL]::FMenu] unpost
+
+# --- Gone directory: the search bounds by the path it had, the reveal greys.
+set ::RESOLVED [file join $SAND no-longer-here]
+$SL on_folder_right $FOLDER 100 100
+update
+check "gone: Search within this folder enabled" \
+    [entry_state "Search within this folder"] normal
+check "gone: Reveal folder disabled" [entry_state "Reveal folder"] disabled
 [set [info object namespace $SL]::FMenu] unpost
 
 # --- Unresolvable folder: both grey out, search included.

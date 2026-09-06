@@ -7,6 +7,7 @@ namespace eval ::questlog::ui {
     variable GLYPH_RUNNING  ●
     variable GLYPH_BOOKMARK ★
     variable GLYPH_ACTIONS  ⋯
+    variable GLYPH_GONE     †     ;# a folder whose directory no longer exists
     variable MODEL_ANY "any model"
 }
 
@@ -41,11 +42,15 @@ proc ::questlog::ui::session_columns {} {
 # ::questlog::ui::SessionList - the left pane: one read-only text widget that is
 # both the session browser and the search-result index in a single list. It is
 # a StreamTree (the generic tree-in-a-text-widget base class) specialised for
-# the session domain: folders are the roots, sessions are their children, and a
-# session's subagents are its grandchildren. SessionList supplies the content
-# and ordering through the base class's hooks (column_spec, render_subject,
-# cell_values, cell_tag, sort_key) and owns the session-specific interaction,
-# cost aggregation, menus, rename, search snippets, and reconcile.
+# the session domain: a folder holds the folders and sessions beneath its
+# directory, a session holds its subagents. A folder's node sits under the
+# folder whose directory most closely contains its own (ensure_folder), so a
+# project's subdirectories nest under it, a corpus of unrelated directories is
+# a row of roots, and a folder whose directory is gone hangs under its nearest
+# living ancestor. SessionList supplies the content and ordering through the
+# base class's hooks (column_spec, render_subject, cell_values, cell_tag,
+# sort_key, kind_rank) and owns the session-specific interaction, cost
+# aggregation, menus, rename, search snippets, and reconcile.
 #
 # Layout, top to bottom, as tagged regions in the one text widget:
 #   folder heading   - the project label, a drop target for moves
@@ -279,9 +284,11 @@ oo::class create ::questlog::ui::SessionList {
     #       shows here as a node absent from its own reverse index.
     #   (b) no node's children list names a child twice, the fault that paints a
     #       row twice when sort_siblings maps a repeated key back through sid.
-    #   (c) no folder node carries an empty label while it has children, the fault
-    #       a hand-built destination folder (label "") reintroduces as a "(N)"
-    #       heading over nothing.
+    #   (c) every folder sits under the folder whose directory most closely
+    #       contains its own (a placeless one at the root), the shape
+    #       ensure_folder builds and folder_after_leave keeps: a folder left at
+    #       the root after its parent arrived, or under a parent whose last
+    #       session left, shows here.
     #   (d) the mutable view-state sets (selection, pin, anchor, folder highlight)
     #       hold node ids that exist as nodes, never a path or basename a move
     #       mutates: a regression to path-keying lodges a string that is no node id
@@ -332,12 +339,16 @@ oo::class create ::questlog::ui::SessionList {
                 dict set seen $c 1
             }
         }
-        # (c) a folder heading with children must carry a non-empty label.
+        # (c) each folder hangs where its directory puts it. Two folders can
+        # share a directory (one spelled through a symlink), so the parent is
+        # checked by directory, not by id.
         foreach id [my all_node_ids] {
-            if {[my node_field $id kind] eq "folder" \
-                && [my node_pget $id label ""] eq "" \
-                && [llength [my node_field $id children]] > 0} {
-                lappend probs "folder [my node_field $id key] has children but empty label"
+            if {[my node_field $id kind] ne "folder"} continue
+            set want [my folder_parent_for [my node_pget $id dir]]
+            set have [my node_field $id parent]
+            if {$want ne $have && ($want eq "" || $have eq "" \
+                    || [my node_pget $want dir] ne [my node_pget $have dir])} {
+                lappend probs "folder [my node_field $id key] sits under '$have', its directory says '$want'"
             }
         }
         # (d) the mutable view-state sets are node-keyed: every id they hold is a
@@ -675,15 +686,15 @@ oo::class create ::questlog::ui::SessionList {
     # Re-fit every rendered row's ellipsis after a width change (a base-class
     # hook, called from relayout inside the widget's normal state): each folder
     # heading, each rendered session header, and the children of an expanded
-    # session.
+    # session, which its header's redraw re-lays.
     method relayout_content {} {
-        foreach fid [my roots] {
-            my redraw_folder_heading [my node_field $fid key]
-            foreach sid [my node_field $fid children] {
-                if {[my node_field $sid rendered]} {
-                    set path [my node_field $sid key]
+        foreach id [my all_rendered_nodes] {
+            switch [my node_field $id kind] {
+                folder { my redraw_folder_heading [my node_field $id key] }
+                session {
+                    set path [my node_field $id key]
                     my redraw_header $path
-                    if {[my node_field $sid expanded]} { my rerender_children $path }
+                    if {[my node_field $id expanded]} { my rerender_children $path }
                 }
             }
         }
@@ -1005,11 +1016,13 @@ oo::class create ::questlog::ui::SessionList {
     # site it drifted into three copies that did not agree.
     #
     # Two arrivals wait for the rebuild. One a filter hides, which drawn would
-    # leave its folder a heading over nothing. One whose folder the last rebuild
-    # dropped for having nothing visible under it (render_skip): the node keeps
-    # its expanded flag but mass_unrender cleared its marks, so there is no
-    # append point to draw beneath and the empty end mark reads as a bad text
-    # index. Deferring both, the rebuild lays the heading and the row together.
+    # leave its folder a heading over nothing. One whose folder has no row:
+    # dropped by the last rebuild for having nothing visible under it
+    # (render_skip), or shut inside a collapsed ancestor. In the first case the
+    # node keeps its expanded flag but mass_unrender cleared its marks, so there
+    # is no append point to draw beneath and the empty end mark reads as a bad
+    # text index. Deferring both, the rebuild lays the heading and the row
+    # together; in the second the ancestor's expand draws the subtree.
     method draw_arrival {path} {
         set folder [my sget $path folder]
         if {[my sflag $path hidden] || ![my folder_attached $folder]} {
@@ -1535,15 +1548,14 @@ oo::class create ::questlog::ui::SessionList {
     # Base-class override for a rebuild's recursion. A session's subagents are drawn
     # by wire_session_row (via render_children) as the session row is re-laid, so
     # descending into them here would draw each a second time (issue #52). Stop at
-    # a session and let render_children be the one writer; folders still recurse
-    # into their sessions, which no wire step draws.
+    # a session and let render_children be the one writer; a folder's body,
+    # folders and sessions alike, is what is due under it, which no wire step draws.
     method render_subtree {id} {
         my render_row $id
         if {[my node_field $id kind] eq "session"} return
         if {[my node_field $id expanded]} {
             foreach c [my node_field $id children] {
-                if {[my node_field $c hidden]} continue
-                my render_subtree $c
+                if {[my drawable $c]} { my render_subtree $c }
             }
         }
     }
@@ -2130,13 +2142,20 @@ oo::class create ::questlog::ui::SessionList {
         }
     }
 
-    # cwd is the folder's real working directory when the caller already holds it
-    # (a move into an as-yet-unscanned folder, where ResolveFolder would walk the
-    # filesystem and find nothing); left "" the resolver answers, as browse does.
+    # The one creator of folder nodes. A folder hangs under the folder whose
+    # directory most closely contains its own, or at the root when none does;
+    # a folder the resolver cannot place (dir "") is a root and never a parent.
+    # Folders arrive in their newest session's order, not top-down, so a new
+    # folder whose directory contains a sibling's takes that sibling beneath it
+    # (adopt_folders); the same step hangs a folder recreated after its last
+    # session left back over the folders it held. cwd is the folder's working
+    # directory when the caller already holds it (a move into an as-yet-unscanned
+    # folder, where ResolveFolder would walk the filesystem and find nothing);
+    # left "" the resolver answers, as browse does.
     method ensure_folder {folder {cwd ""}} {
         if {[my has_folder $folder]} return
         if {$cwd eq ""} { set cwd [{*}$ResolveFolder $folder] }
-        set label [::questlog::path::display_label $cwd $folder]
+        set dir [expr {$cwd eq "" ? "" : [file normalize $cwd]}]
         # Browsing opens folders collapsed (an overview of projects); a search
         # opens them expanded so the matches under each folder are visible. A
         # collapsed folder draws only its heading - its sessions live in the
@@ -2144,33 +2163,139 @@ oo::class create ::questlog::ui::SessionList {
         set expanded [expr {[::questlog::ui::any_criteria $Snapshot] ? 1 : 0}]
         # The heading is drawn collapsed by default, so flip the open ones and
         # redraw the marker in place.
-        set fid [my insert "" folder $folder [dict create label $label]]
+        set parent [my folder_parent_for $dir]
+        set fid [my insert $parent folder $folder [dict create dir $dir] \
+                     -pos [list before [my first_session_child $parent]]]
         if {$expanded} { my node_set $fid expanded 1; my item $fid }
+        my adopt_folders $fid
+        # insert stores a node at its ranked place but draws it at the parent's
+        # append point, below any session drawn there: re-lay the body.
+        if {$parent ne "" && [my node_field $fid rendered] \
+            && [my first_session_child $parent] ne ""} {
+            my collapse_folder [my node_field $parent key]
+            my expand $parent
+        }
     }
 
-    # The folder heading subject: the marker, the (truncated) project label and a
-    # bare "(N)" session count - "(N of M)" when a list filter hides some of the
-    # folder's rows, M the model count. The folder's size and cost aggregates are laid by
+    # The first session among a folder's children ("" with none, or at the
+    # root): where a folder goes in to keep folders above sessions (kind_rank)
+    # between rebuilds.
+    method first_session_child {parent} {
+        if {$parent eq ""} { return "" }
+        foreach c [my node_field $parent children] {
+            if {[my node_field $c kind] eq "session"} { return $c }
+        }
+        return ""
+    }
+
+    # The folder whose directory most closely contains dir, the parent a folder
+    # at dir takes; "" when no folder's does. Two folders can share a directory
+    # (one spelled through a symlink), and the first in store order wins.
+    method folder_parent_for {dir} {
+        set best ""
+        set depth -1
+        dict for {_ fid} $FolderNode {
+            set fdir [my node_pget $fid dir]
+            if {[string length $fdir] > $depth && [my dir_within $dir $fdir]} {
+                set best $fid
+                set depth [string length $fdir]
+            }
+        }
+        return $best
+    }
+
+    # 1 iff dir lies strictly inside ancestor. A placeless "" is inside nothing
+    # and holds nothing.
+    method dir_within {dir ancestor} {
+        return [expr {$dir ne "" && $ancestor ne "" && $dir ne $ancestor \
+                      && [::questlog::scan::in_subtree_of $dir [list $ancestor]]}]
+    }
+
+    # Bring the folders that belong beneath a new folder in under it: those of
+    # its siblings whose directories lie inside its own, each with its subtree.
+    method adopt_folders {fid} {
+        set dir [my node_pget $fid dir]
+        set parent [my node_field $fid parent]
+        set sibs [expr {$parent eq "" ? [my roots] : [my node_field $parent children]}]
+        foreach id $sibs {
+            if {$id eq $fid || [my node_field $id kind] ne "folder"} continue
+            if {[my dir_within [my node_pget $id dir] $dir]} {
+                my reparent_folder $id $fid
+            }
+        }
+    }
+
+    # Hang a folder, with its subtree, under another folder or at the root
+    # (parent ""). It goes in after the last folder among its new siblings, so
+    # the store keeps folders before sessions between rebuilds (kind_rank), and
+    # its row leaves the view first and returns when its new place is due, the
+    # way unhide draws a node back. The base class's move takes only a folder
+    # as the new parent and rebuilds the whole list per call; a folder arriving
+    # over many siblings would pay that once per sibling.
+    method reparent_folder {id newparent} {
+        my detach $id
+        set old [my node_field $id parent]
+        if {$old eq ""} {
+            set Roots [lsearch -all -inline -not -exact $Roots $id]
+        } else {
+            my node_set $old children \
+                [lsearch -all -inline -not -exact [my node_field $old children] $id]
+        }
+        my node_set $id parent $newparent
+        if {$newparent eq ""} {
+            lappend Roots $id
+        } else {
+            set kids [my node_field $newparent children]
+            set at [lsearch -exact $kids [my first_session_child $newparent]]
+            my node_set $newparent children \
+                [linsert $kids [expr {$at < 0 ? "end" : $at}] $id]
+        }
+        if {[my drawable $id]} { my render_subtree $id }
+        my check_invariant reparent_folder
+    }
+
+    # A folder's label: its directory relative to the folder it sits under, or
+    # absolute (home abbreviated) at the root, where nothing above it is a row.
+    # The relative form runs several segments when the directories between hold
+    # no folder, and when the folder's own directory is gone and it hangs under
+    # its nearest living ancestor.
+    method folder_label {fid} {
+        set parent [my node_field $fid parent]
+        return [::questlog::path::display_label [my node_pget $fid dir] \
+                    [my node_field $fid key] \
+                    [expr {$parent eq "" ? "" : [my node_pget $parent dir]}]]
+    }
+
+    # 1 iff the folder's directory is known and no longer exists. Read from disk
+    # at each heading draw, so a directory restored later heals on the next.
+    method folder_gone {fid} {
+        set dir [my node_pget $fid dir]
+        return [expr {$dir ne "" && ![file isdirectory $dir]}]
+    }
+
+    # The folder heading subject: the marker, the (truncated) project label, the
+    # gone glyph when its directory no longer exists, and a bare "(N)" session
+    # count - "(N of M)" when a list filter hides some of the folder's rows, M
+    # the model count. The folder's size and cost aggregates are laid by
     # the base class as cells (cell_values) under the rows' size/cost columns, with an
     # empty date cell so the double tab opens straight into the size column; their
     # bold/tier tags come from cell_tag. The subject tags only its leading marker
     # (the foldchevron range), so a Button-1 on the marker can be told from one on
     # the label: the marker toggles expand/collapse, the label selects the folder.
     method folder_subject {node} {
-        set f [my node_payload $node]
         set marker [expr {[my node_field $node expanded] ? "▾" : "▸"}]
         set folder [my node_field $node key]
         set n [my folder_visible_count $folder]
         set total [dict get [my folder_totals $folder] count]
-        set count_str ""
+        set count_str [expr {[my folder_gone $node] ? " $::questlog::ui::GLYPH_GONE" : ""}]
         if {$n > 0} {
-            set count_str [expr {$total > $n ? " ($n of $total)" : " ($n)"}]
+            append count_str [expr {$total > $n ? " ($n of $total)" : " ($n)"}]
         }
         # Marker joined to the label by a space; the label is truncated so it
         # never runs into the right-pinned aggregates.
         set fixed [expr {[font measure QLList "$marker "] \
                          + [font measure QLList $count_str]}]
-        set full [dict get $f label]
+        set full [my folder_label $node]
         set label [my truncate_px $full \
                        [expr {$FolderLabelMax - $fixed}] QLList]
         set tags [list [list foldchevron 0 1]]
@@ -2258,8 +2383,9 @@ oo::class create ::questlog::ui::SessionList {
 
     # The folder heading's right-click menu. Kept small and folder-shaped (a
     # bounds action and a reveal), not the session action set, which is built for
-    # a session target. Both actions need the project's real working directory;
-    # a folder whose directory is gone resolves to "" and both entries grey out.
+    # a session target. Both actions need the project's working directory: a
+    # folder the resolver cannot place greys both out; one whose directory is
+    # gone still bounds a search by the path it had, but has nowhere to reveal.
     method build_folder_menu {} {
         set FMenu $Top.fmenu
         menu $FMenu -tearoff 0
@@ -2275,7 +2401,7 @@ oo::class create ::questlog::ui::SessionList {
             -state [expr {$OnFolderBound eq "" || $cwd eq "" ? "disabled" : "normal"}]
         $FMenu add command -label "Reveal folder" \
             -command [list [self] folder_reveal $folder] \
-            -state [expr {$cwd eq "" ? "disabled" : "normal"}]
+            -state [expr {[file isdirectory $cwd] ? "normal" : "disabled"}]
         tk_popup $FMenu $X $Y
     }
 
@@ -2286,45 +2412,41 @@ oo::class create ::questlog::ui::SessionList {
 
     method folder_reveal {folder} {
         set cwd [{*}$ResolveFolder $folder]
-        if {$cwd eq ""} return
+        if {![file isdirectory $cwd]} return
         ::questlog::ui::session_actions::reveal_dir $cwd
     }
 
+    # Open or shut a folder: the base class's expand draws what is due under it,
+    # folders and sessions in store order, and collapse takes the body away.
     method toggle_folder {folder} {
         if {![my has_folder $folder]} return
         set fid [my fid $folder]
-        set exp [expr {![my node_field $fid expanded]}]
-        my node_set $fid expanded $exp
         $Text configure -state normal
-        if {$exp} { my expand_folder $folder } else { my collapse_folder $folder }
+        if {[my node_field $fid expanded]} {
+            my collapse_folder $folder
+        } else {
+            my expand $fid
+        }
         my redraw_folder_heading $folder
         $Text configure -state disabled
         my check_invariant toggle_folder
     }
 
-    method expand_folder {folder} {
-        foreach path [my folder_visible_paths $folder] {
-            my render_session $path
-        }
-    }
-
-    # Open every folder one level, in one batch so the reader's scroll
+    # Open every root one level, in one batch so the reader's scroll
     # position anchors once for the whole sweep.
     method expand_all_folders {} {
         my batch {
             foreach fid [my roots] {
                 if {[my node_field $fid expanded]} continue
-                set folder [my node_field $fid key]
-                my node_set $fid expanded 1
-                my expand_folder $folder
-                my redraw_folder_heading $folder
+                my expand $fid
+                my redraw_folder_heading [my node_field $fid key]
             }
         }
         my check_invariant expand_all_folders
     }
 
     # A folder's VISIBLE session paths in the on-screen (sorted) order - the
-    # order a Shift-range walks and that expand_folder renders. Hidden rows
+    # order a Shift-range walks. Hidden rows
     # (view-toggled out) are not in it: a range selection or a batch action
     # must never touch a session the user cannot see. The one place a
     # folder's display order and visibility compose.
@@ -2336,12 +2458,15 @@ oo::class create ::questlog::ui::SessionList {
         return [my sort_paths $shown [my folder_session_src $folder]]
     }
 
-    # A folder's session paths, in the order they sit under the folder node.
+    # A folder's own session paths, in the order they sit under the folder node;
+    # the folders beside them are not sessions and are left out.
     method folder_session_paths {folder} {
         if {![my has_folder $folder]} { return [list] }
         set out [list]
         foreach sid [my node_field [my fid $folder] children] {
-            lappend out [my node_field $sid key]
+            if {[my node_field $sid kind] eq "session"} {
+                lappend out [my node_field $sid key]
+            }
         }
         return $out
     }
@@ -2410,6 +2535,7 @@ oo::class create ::questlog::ui::SessionList {
     method folder_totals {folder {shown 0}} {
         set n 0; set sz 0; set cst 0.0
         foreach sid [my node_field [my fid $folder] children] {
+            if {[my node_field $sid kind] ne "session"} continue
             set sz [expr {$sz + [my node_pget $sid size 0]}]
             set c [my node_pget $sid cost]
             if {$c ne "" && $c > 0} { set cst [expr {$cst + $c}] }
@@ -3263,15 +3389,23 @@ oo::class create ::questlog::ui::SessionList {
 
     # ---- removal / relocation ----------------------------------------
 
-    # The folder-level settle after one session leaves it: an emptied folder is
-    # dropped whole, else its heading re-derives. The node must already be off
-    # the folder's children list (deleted or detached) when this runs.
+    # The folder-level settle after one session leaves it. A folder with no
+    # session of its own is not a row: the folders it still holds step up to
+    # its parent (carrying its label in theirs, folder_label) and it is dropped
+    # whole; else its heading re-derives. The node must already be off the
+    # folder's children list (deleted or detached) when this runs.
     method folder_after_leave {fid folder} {
-        if {[llength [my node_field $fid children]] == 0} {
-            my forget_folder $folder
-        } else {
+        if {[llength [my folder_session_paths $folder]] > 0} {
             my redraw_folder_heading $folder
+            return
         }
+        set parent [my node_field $fid parent]
+        set held [my node_field $fid children]
+        foreach c $held { my reparent_folder $c $parent }
+        my forget_folder $folder
+        # The promoted folders drew at the tail of their new sibling set, below
+        # its sessions; the rebuild ranks them back above (kind_rank).
+        if {[llength $held]} { my rebuild }
     }
 
     method forget_session {path} {
@@ -3358,30 +3492,36 @@ oo::class create ::questlog::ui::SessionList {
             lappend new_cps $new_cp
         }
         my node_pset $sid all_child_paths $new_cps
-        # Create the destination folder through the single creator, which labels it
-        # from the cwd move_one holds (an empty label "" is what left a "(N)"
-        # heading over nothing). No draw needed; the move's rebuild re-lays it.
+        # Create the destination folder through the single creator, placed by
+        # the cwd move_one holds (the resolver would not answer for a folder the
+        # scan has not touched). No draw needed; the move's rebuild re-lays it.
         my ensure_folder $new_folder $new_cwd
         # Selection, pin and anchor key by the stable sid, which the move keeps, so
         # a re-parent carries them for free - nothing to re-key here.
-        # The move's rebuild re-lays both headings from the derived totals; an
-        # emptied source folder is dropped whole (the rule forget_session applies).
+        # The move's rebuild re-lays both headings from the derived totals; the
+        # source folder settles as after any other leave.
         my move $sid [my fid $new_folder]
-        if {[llength [my node_field $src_fid children]] == 0} {
-            my forget_folder $src_folder
-        }
+        my folder_after_leave $src_fid $src_folder
     }
 
-    # Reorder a sibling set for a rebuild, keeping every node (the base renders
-    # from the durable store and skips the unviewable separately). Folders
-    # reorder by the active sort (cost by aggregate, path by displayed label,
-    # else arrival order); a folder's sessions reorder by sort_paths; subagents
-    # keep arrival order.
+    # Folders sit above the sessions beside them, as every file tree groups
+    # directories first; a session's subagents have no other kind beside them.
+    method kind_rank {kind} {
+        return [dict get {folder 0 session 1 subagent 2} $kind]
+    }
+
+    # Reorder one kind's run of siblings for a rebuild, keeping every node (the
+    # base renders from the durable store and skips the unviewable separately;
+    # it ranks the kinds and hands each run here on its own). Folders reorder
+    # by the active sort (cost by aggregate, path by label, else arrival
+    # order); sessions by sort_paths; subagents keep arrival order.
     method sort_siblings {ids} {
         if {[llength $ids] == 0} { return $ids }
+        set bykey [dict create]
+        foreach id $ids { dict set bykey [my node_field $id key] $id }
+        set order [dict keys $bykey]
         switch [my node_field [lindex $ids 0] kind] {
             folder {
-                set order [lmap id $ids { my node_field $id key }]
                 if {$SortKey eq "cost"} {
                     set valmap [dict create]
                     foreach id $ids {
@@ -3391,31 +3531,37 @@ oo::class create ::questlog::ui::SessionList {
                     set order [my sort_folders $order $valmap -real]
                 } elseif {$SortKey eq "path"} {
                     set valmap [dict create]
-                    foreach id $ids { dict set valmap [my node_field $id key] [my node_pget $id label ""] }
+                    foreach id $ids { dict set valmap [my node_field $id key] [my folder_label $id] }
                     set order [my sort_folders $order $valmap -dictionary]
                 }
-                return [lmap k $order { my fid $k }]
             }
             session {
                 set src [dict create]
-                foreach id $ids { dict set src [my node_field $id key] [my session_payload [my node_field $id key]] }
-                set order [my sort_paths [lmap id $ids { my node_field $id key }] $src]
-                return [lmap k $order { my sid $k }]
+                foreach id $ids { dict set src [my node_field $id key] [my node_payload $id] }
+                set order [my sort_paths $order $src]
             }
-            default { return $ids }
         }
+        return [lmap k $order { dict get $bykey $k }]
     }
 
-    # A folder with no viewable session (empty, or every row hidden by a
-    # list-view toggle) leaves the rendered view but stays in the store, so it
-    # returns once a session is shown again.
+    # A folder with no viewable session anywhere beneath it (none of its own
+    # shown, none in a folder it holds) leaves the rendered view but stays in
+    # the store, so it returns once a session is shown again. One whose own
+    # sessions a list-view toggle hides stays a row while a folder beneath
+    # shows one: the toggle hides rows, it does not reshape the tree.
     method render_skip {id} {
-        return [expr {[my node_field $id kind] eq "folder" \
-            && [my folder_visible_count [my node_field $id key]] == 0}]
+        if {[my node_field $id kind] ne "folder"} { return 0 }
+        if {[my folder_visible_count [my node_field $id key]] > 0} { return 0 }
+        foreach c [my node_field $id children] {
+            if {[my node_field $c kind] eq "folder" && ![my render_skip $c]} { return 0 }
+        }
+        return 1
     }
 
     # Whether a folder's heading is currently drawn: a folder dropped from the
-    # view by render_skip reads 0 until a rebuild draws it again.
+    # view by render_skip, or shut inside a collapsed ancestor, reads 0 until
+    # the rebuild or the ancestor's expand draws it again (a drawn row has
+    # every ancestor drawn and open, the base class's invariant).
     method folder_attached {folder} {
         return [expr {[my has_folder $folder] && [my node_field [my fid $folder] rendered]}]
     }
@@ -3753,12 +3899,14 @@ oo::class create ::questlog::ui::SessionList {
         my refresh_filter_note
     }
 
-    # Mark a folder open in the store without drawing it; the rebuild that follows
-    # draws its shown rows. A browse folder is created collapsed, and a session
-    # pulled in behind a collapsed heading would be loaded and still invisible.
+    # Mark a folder and every folder above it open in the store without drawing;
+    # the rebuild that follows draws its shown rows. A browse folder is created
+    # collapsed, and a session pulled in behind a collapsed heading would be
+    # loaded and still invisible.
     method open_folder_node {folder} {
         if {![my has_folder $folder]} return
-        my node_set [my fid $folder] expanded 1
+        set fid [my fid $folder]
+        foreach id [list $fid {*}[my ancestors $fid]] { my node_set $id expanded 1 }
     }
 
     # The widen button is only ever drawn for a reason that names a criterion, and

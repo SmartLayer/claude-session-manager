@@ -110,7 +110,7 @@ proc rootkeys {} {
 }
 proc rootlabels {} {
     global SL ns
-    return [lmap fid [set ${ns}::Roots] { $SL node_pget $fid label "" }]
+    return [lmap fid [set ${ns}::Roots] { $SL folder_label $fid }]
 }
 
 # Stream the three folders in under the default (date-desc) sort.
@@ -132,7 +132,7 @@ check "sessions stream date-descending within a folder" $p1_date_order $P1PATHS
 
 # Expected folder orders, derived from the live labels (not hard-coded), so the
 # test tracks resolvef rather than restating it.
-set labelled [lmap fid [set ${ns}::Roots] { list [$SL node_field $fid key] [$SL node_pget $fid label ""] }]
+set labelled [lmap fid [set ${ns}::Roots] { list [$SL node_field $fid key] [$SL folder_label $fid] }]
 set want_asc  [lmap e [lsort -dictionary -index 1 $labelled] { lindex $e 0 }]
 set want_desc [lmap e [lsort -dictionary -decreasing -index 1 $labelled] { lindex $e 0 }]
 check "the path order genuinely differs from arrival order" \
