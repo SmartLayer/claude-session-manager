@@ -2925,7 +2925,7 @@ oo::class create ::questlog::ui::SessionList {
         if {![my has_session $path]} return
         set folder [my sget $path folder]
         set cwd [expr {$folder ne "" ? [{*}$ResolveFolder $folder] : ""}]
-        if {$cwd eq ""} return
+        if {![file isdirectory $cwd]} return
         my clipboard_set \
             [::questlog::ui::terminal::resume_command $cwd [file rootname [file tail $path]]]
     }
@@ -3166,6 +3166,9 @@ oo::class create ::questlog::ui::SessionList {
         set MenuPath $path
         set MenuTarget [dict create path $path uuid $uuid cwd $cwd folder $folder]
 
+        # A resume runs in the project directory, so the resolver's answer
+        # for a gone directory (the path the folder had) is no cwd to resume
+        # in: the entries grey out as folder_reveal and the move picker do.
         set ctx [dict create target $MenuTarget parent $Top \
             clipboard [list [self] clipboard_set] \
             on_open [list [self] open_session] \
@@ -3174,7 +3177,7 @@ oo::class create ::questlog::ui::SessionList {
             on_rename $OnRename \
             state [dict create \
                 is_bookmarked [file executable $path] \
-                has_cwd [expr {$cwd ne ""}] \
+                has_cwd [file isdirectory $cwd] \
                 has_folder [expr {$folder ne ""}]]]
         # A hit adds the two match-specific entries: "Open at this match" reuses
         # the badge's left-click open (on_snippet_release), "Copy this snippet"

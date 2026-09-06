@@ -1,12 +1,17 @@
 #!/usr/bin/env wish9.0
-# The folder heading's right-click menu gates both entries on the resolved
-# project cwd. "Search within this folder" bounds the search to that cwd, so a
-# folder whose directory cannot be resolved ("" from the resolver) must grey
-# it out like "Reveal folder" - the old gate checked only the callback's
-# presence, which in the wired app is always true, and the click then fell
-# into on_folder_bound's silent empty-cwd return. A folder whose directory is
-# gone resolves to the path it had: the search still bounds by it, the reveal
-# has nowhere to go.
+# The two right-click menus gate their entries on the resolved project cwd.
+#
+# The folder heading's: "Search within this folder" bounds the search to that
+# cwd, so a folder whose directory cannot be resolved ("" from the resolver)
+# must grey it out like "Reveal folder" - the old gate checked only the
+# callback's presence, which in the wired app is always true, and the click
+# then fell into on_folder_bound's silent empty-cwd return. A folder whose
+# directory is gone resolves to the path it had: the search still bounds by
+# it, the reveal has nowhere to go.
+#
+# The session row's: a resume runs `cd` into the project directory, so the
+# three resume entries and the Ctrl+R copy need a directory that exists; a
+# gone directory's recorded path greys them as it greys the reveal.
 
 package require Tcl 9
 package require Tk
@@ -22,7 +27,8 @@ package require streamtree
 set ::questlog_config_only 1; source [file join $ROOT questlog]
 foreach f {lib/cost.tcl ui/theme.tcl lib/path.tcl lib/listfilter.tcl \
            lib/match.tcl ui/terminal.tcl ui/live.tcl lib/scan.tcl lib/search.tcl \
-           ui/drag.tcl ui/toolbar.tcl ui/reveal.tcl ui/sessions.tcl} {
+           ui/drag.tcl ui/toolbar.tcl ui/reveal.tcl ui/session_actions.tcl \
+           ui/sessions.tcl} {
     source [file join $ROOT $f]
 }
 ::questlog::ui::theme::init
@@ -60,8 +66,8 @@ proc check {name got want} {
         incr ::fails
     }
 }
-proc entry_state {label} {
-    set m [set [info object namespace $::SL]::FMenu]
+proc entry_state {label {menu FMenu}} {
+    set m [set [info object namespace $::SL]::$menu]
     for {set i 0} {$i <= [$m index end]} {incr i} {
         if {[$m type $i] eq "command" && [$m entrycget $i -label] eq $label} {
             return [$m entrycget $i -state]
@@ -102,6 +108,38 @@ check "unresolved: Search within this folder disabled" \
     [entry_state "Search within this folder"] disabled
 check "unresolved: Reveal folder disabled" [entry_state "Reveal folder"] disabled
 [set [info object namespace $SL]::FMenu] unpost
+
+# --- The session menu and the Ctrl+R copy: live on a directory that exists,
+# grey on a gone one, whose recorded path the resolver still answers.
+set ::RESOLVED $SAND
+$SL on_session_right $Sp 100 100
+update
+check "session, resolved: Resume in new terminal tab enabled" \
+    [entry_state "Resume in new terminal tab" Menu] normal
+check "session, resolved: Copy resume command enabled" \
+    [entry_state "Copy resume command" Menu] normal
+[set [info object namespace $SL]::Menu] unpost
+clipboard clear
+$SL copy_selected_resume
+check "resolved: Ctrl+R copies a resume command into the directory" \
+    [string match "cd '$SAND'*" [clipboard get]] 1
+
+set ::RESOLVED [file join $SAND no-longer-here]
+$SL on_session_right $Sp 100 100
+update
+check "session, gone: Resume in new terminal tab disabled" \
+    [entry_state "Resume in new terminal tab" Menu] disabled
+check "session, gone: Resume forked disabled" \
+    [entry_state "Resume forked" Menu] disabled
+check "session, gone: Copy resume command disabled" \
+    [entry_state "Copy resume command" Menu] disabled
+check "session, gone: Reveal folder stays on the folder alone" \
+    [entry_state "Reveal folder" Menu] normal
+[set [info object namespace $SL]::Menu] unpost
+clipboard clear
+clipboard append "untouched"
+$SL copy_selected_resume
+check "gone: Ctrl+R leaves the clipboard alone" [clipboard get] untouched
 
 ::questlog::path::_real_file delete -force $SAND
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]

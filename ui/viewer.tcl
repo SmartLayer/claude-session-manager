@@ -1001,7 +1001,7 @@ oo::class create ::questlog::ui::Viewer {
             on_rename $OnRename \
             state [dict create \
                 is_bookmarked [file executable $Path] \
-                has_cwd [expr {$Cwd ne ""}] \
+                has_cwd [file isdirectory $Cwd] \
                 has_folder [expr {$folder ne ""}]]]
         set idx [::questlog::ui::session_actions::populate $ActionMenu $ctx]
         ::questlog::ui::session_actions::apply_state \
