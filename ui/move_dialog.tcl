@@ -2,8 +2,8 @@ package require Tcl 9
 package require Tk
 
 # ::questlog::ui::move_dialog - modal picker for the "Move session to another
-# project" operation. Lists the session list's folders as the list shows
-# them, plus a free-text entry for a cwd that has no project folder yet. The
+# project" operation. Lists the session list's folders as the tree the list
+# shows, plus a free-text entry for a cwd that has no project folder yet. The
 # single entry point `open` takes a callback; the caller routes the chosen cwd
 # through ::questlog::path::ensure_project_folder and ::questlog::path::move_session.
 #
@@ -16,9 +16,8 @@ namespace eval ::questlog::ui::move_dialog {
     variable Tv ""
     variable EntryVar ""
     variable CurrentFolder ""
-    variable Folders {}       ;# the list's folder roster: {key dir label depth} each
+    variable Folders {}       ;# the list's folder roster: {key dir label parent} each
     variable OnDone ""
-    variable RowToCwd [dict create]
     variable LiveCb ""        ;# cb: () -> display names of selected sessions
                               ;# that are live right now (empty = none)
     variable LivePoll ""      ;# after-id of the live-state recheck, or ""
@@ -39,7 +38,6 @@ proc ::questlog::ui::move_dialog::open {parent count current_folder folders on_d
     variable CurrentFolder
     variable Folders
     variable OnDone
-    variable RowToCwd
     variable LiveCb
     variable LiveNames
 
@@ -49,7 +47,6 @@ proc ::questlog::ui::move_dialog::open {parent count current_folder folders on_d
     set LiveCb $live_cb
     set LiveNames {}
     set EntryVar ""
-    set RowToCwd [dict create]
 
     set Top .fms_movedlg
     if {[winfo exists $Top]} { destroy $Top }
@@ -143,26 +140,29 @@ proc ::questlog::ui::move_dialog::populate {} {
     variable Tv
     variable CurrentFolder
     variable Folders
-    variable RowToCwd
-    # One row per folder of the roster, in its order: the list's tree, each
-    # stepped in to its depth and labelled as its heading is, so the picker
-    # reads as the list does, then the projects on disk the list is not
-    # showing, flat beneath. The source folder is left out; the folders
-    # beneath it stay, since a session can move down into its own project. A
-    # folder with no directory to move into (one the resolver could not
-    # place, or whose directory is gone) is left out too: moving into it
-    # would point a resume command at nothing. The directory is checked on
-    # disk here rather than trusted from the heading, which the list draws
-    # from a cache.
-    set seq 0
+    # One item per folder of the roster, in its order, under its parent's
+    # item and labelled as its heading is, every branch open, so the picker
+    # reads as the list does; the projects on disk the list is not showing
+    # sit flat beneath the roots. Each item carries its directory as its
+    # value. The source folder is left out; the folders beneath it stay,
+    # since a session can move down into its own project, hung under the
+    # nearest folder above them that is listed. A folder with no directory
+    # to move into (one the resolver could not place, or whose directory is
+    # gone) is left out too: moving into it would point a resume command at
+    # nothing. The directory is checked on disk here rather than trusted
+    # from the heading, which the list draws from a cache.
+    set iids [dict create]
+    set parents [dict create]
     foreach f $Folders {
-        if {[dict get $f key] eq $CurrentFolder} continue
+        set key [dict get $f key]
+        dict set parents $key [dict get $f parent]
+        if {$key eq $CurrentFolder} continue
         set cwd [dict get $f dir]
         if {![file isdirectory $cwd]} continue
-        set iid [format "F:%d" [incr seq]]
-        $Tv insert {} end -id $iid \
-            -text "[string repeat {    } [dict get $f depth]][dict get $f label]"
-        dict set RowToCwd $iid $cwd
+        set p [dict get $f parent]
+        while {$p ne "" && ![dict exists $iids $p]} { set p [dict get $parents $p] }
+        dict set iids $key [$Tv insert [dict getdef $iids $p {}] end \
+            -text [dict get $f label] -values [list $cwd] -open 1]
     }
 }
 
@@ -189,20 +189,15 @@ proc ::questlog::ui::move_dialog::browse {} {
 proc ::questlog::ui::move_dialog::on_select {} {
     variable Tv
     variable EntryVar
-    variable RowToCwd
     set sel [$Tv selection]
     if {[llength $sel] == 0} return
-    set iid [lindex $sel 0]
-    if {[dict exists $RowToCwd $iid]} {
-        set EntryVar [dict get $RowToCwd $iid]
-    }
+    set EntryVar [lindex [$Tv item [lindex $sel 0] -values] 0]
 }
 
 proc ::questlog::ui::move_dialog::confirm {} {
     variable Top
     variable Tv
     variable EntryVar
-    variable RowToCwd
     variable OnDone
     variable LiveNames
     # The Treeview double-click and entry Return reach confirm directly, past
@@ -212,7 +207,7 @@ proc ::questlog::ui::move_dialog::confirm {} {
     if {$cwd eq ""} {
         set sel [$Tv selection]
         if {[llength $sel] == 0} return
-        set cwd [dict get $RowToCwd [lindex $sel 0]]
+        set cwd [lindex [$Tv item [lindex $sel 0] -values] 0]
     }
     if {![string match "/*" $cwd]} {
         tk_messageBox -parent $Top -icon error -title "Move session" \

@@ -1,11 +1,11 @@
 #!/usr/bin/env wish9.0
-# The move picker lists the session list's folders as the list shows them:
-# the tree's order, each labelled as its heading is and stepped in to its
-# depth. The source folder is left out and the folders beneath it kept, since
-# a session can move down into its own project; a folder with no directory to
-# move into (gone) is left out. With no single source (a group move) every
-# folder is offered. Beneath the tree, flat, sit the projects on disk the
-# list is not showing (outside its since bound), labelled by their path.
+# The move picker lists the session list's folders as the tree the list
+# shows: each under its parent's item, labelled as its heading is, every
+# branch open. The source folder is left out and the folders beneath it kept,
+# since a session can move down into its own project; a folder with no
+# directory to move into (gone) is left out. With no single source (a group
+# move) every folder is offered. Beneath the roots, flat, sit the projects on
+# disk the list is not showing (outside its since bound), labelled by their
 #
 # The corpus, under a sandbox $HOME (every name fictional):
 #   ~/proj/forge            a session; the root
@@ -85,16 +85,21 @@ proc check {name got want} {
         puts "FAIL - $name"; puts "       got:  $got"; puts "       want: $want"; incr ::fails
     }
 }
-# The picker's rows, top to bottom, as the reader sees them, and the
-# directory each stands for.
-proc picker_rows {} {
+# The picker's items top to bottom as the reader sees them, each label led
+# by one ">" per level of nesting, and the directory each stands for.
+proc picker_items {{parent {}} {depth 0}} {
     set tv $::questlog::ui::move_dialog::Tv
-    return [lmap iid [$tv children {}] { $tv item $iid -text }]
+    set out [list]
+    foreach iid [$tv children $parent] {
+        lappend out [list "[string repeat > $depth][$tv item $iid -text]" \
+                          [lindex [$tv item $iid -values] 0] [$tv item $iid -open]]
+        lappend out {*}[picker_items $iid [expr {$depth + 1}]]
+    }
+    return $out
 }
-proc picker_dirs {} {
-    set tv $::questlog::ui::move_dialog::Tv
-    return [lmap iid [$tv children {}] { dict get $::questlog::ui::move_dialog::RowToCwd $iid }]
-}
+proc picker_rows {} { return [lmap it [picker_items] { lindex $it 0 }] }
+proc picker_dirs {} { return [lmap it [picker_items] { lindex $it 1 }] }
+proc picker_open {} { return [lmap it [picker_items] { lindex $it 2 }] }
 
 $SL apply_filter [dict create since 30d]
 set ::scan_done 0
@@ -108,24 +113,25 @@ set roster [$SL folder_roster]
 check "the roster walks the tree parents first, then the projects the list is not showing" \
     [lmap f $roster { dict get $f key }] \
     [list $F_FORGE $F_BELLOWS $F_SLAG $F_ANVIL $F_QUENCH]
-check "each folder carries its heading's label and its depth; a project outside the tree its path, flat" \
-    [lmap f $roster { list [dict get $f label] [dict get $f depth] }] \
-    [list {~/proj/forge 0} {bellows 1} {slag 1} {~/proj/anvil 0} {~/proj/quench 0}]
+check "each folder carries its heading's label and names its parent; a project outside the tree its path, at the root" \
+    [lmap f $roster { list [dict get $f label] [dict get $f parent] }] \
+    [list {~/proj/forge {}} [list bellows $F_FORGE] [list slag $F_FORGE] {~/proj/anvil {}} {~/proj/quench {}}]
 
 # ---- one session moving out of the root ------------------------------------
 ::questlog::ui::move_dialog::open . 1 $F_FORGE $roster noop ""
 update
-check "the source folder is left out, its descendants kept, the gone ones skipped, the unshown project beneath" \
-    [picker_rows] [list "    bellows" "~/proj/anvil" "~/proj/quench"]
-check "each row stands for its folder's directory" [picker_dirs] [list $BELLOWS $ANVIL $QUENCH]
+check "the source folder is left out, its descendants hung above, the gone ones skipped, the unshown project beneath" \
+    [picker_rows] [list "bellows" "~/proj/anvil" "~/proj/quench"]
+check "each item stands for its folder's directory" [picker_dirs] [list $BELLOWS $ANVIL $QUENCH]
 ::questlog::ui::move_dialog::cancel
 update
 
 # ---- a group move names no source, so every living folder is offered ---------
 ::questlog::ui::move_dialog::open . 2 "" $roster noop ""
 update
-check "with no single source every living folder is offered" \
-    [picker_rows] [list "~/proj/forge" "    bellows" "~/proj/anvil" "~/proj/quench"]
+check "with no single source every living folder is offered, nested under its parent" \
+    [picker_rows] [list "~/proj/forge" ">bellows" "~/proj/anvil" "~/proj/quench"]
+check "every branch is open" [picker_open] {1 1 1 1}
 ::questlog::ui::move_dialog::cancel
 update
 

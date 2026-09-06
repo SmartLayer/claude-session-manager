@@ -2563,21 +2563,23 @@ oo::class create ::questlog::ui::SessionList {
         return $out
     }
 
-    # The destinations the move picker lists, each as {key dir label depth}:
+    # The destinations the move picker lists, each as {key dir label parent}:
     # every folder in the store in display order, parents before children,
-    # labelled and stepped in as their headings are, then flat beneath them
-    # the projects on disk the store holds no session of (outside the since
-    # or subtree bound), labelled by their absolute path, so a session can
-    # move to a project the list is not showing. A folder the resolver cannot
-    # place is left out; one whose directory is gone the picker leaves out.
+    # labelled as their headings are and naming the folder they hang under
+    # ("" at the root), then beneath them the projects on disk the store
+    # holds no session of (outside the since or subtree bound), labelled by
+    # their absolute path, so a session can move to a project the list is
+    # not showing. A folder the resolver cannot place is left out; one whose
+    # directory is gone the picker leaves out.
     method folder_roster {} {
         set out [list]
         foreach rid [my roots] {
             foreach id [list $rid {*}[my descendants $rid]] {
                 if {[my node_field $id kind] ne "folder"} continue
+                set p [my node_field $id parent]
                 lappend out [dict create key [my node_field $id key] \
                     dir [my node_pget $id dir] label [my folder_label $id] \
-                    depth [my nesting $id]]
+                    parent [expr {$p eq "" ? "" : [my node_field $p key]}]]
             }
         }
         set rest [list]
@@ -2586,7 +2588,7 @@ oo::class create ::questlog::ui::SessionList {
             set cwd [{*}$ResolveFolder $folder]
             if {$cwd eq ""} continue
             lappend rest [dict create key $folder dir [file normalize $cwd] \
-                label [::questlog::path::pretty_home $cwd] depth 0]
+                label [::questlog::path::pretty_home $cwd] parent ""]
         }
         return [concat $out [lsort -dictionary -index 5 $rest]]
     }
