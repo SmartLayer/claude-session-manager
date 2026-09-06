@@ -55,6 +55,12 @@ $::questlog::cli::commandline::CL section output {output:} -note {
     {  computed here, an API-equivalent figure, not a number the harness billed.}
     {  By default a session's whole-transcript cost counts once it falls in the}
     {  window; --accrued-cost instead counts only the spend dated inside the window.}
+    {}
+    {  Every mode totals its result: --shortstat over the whole and again by folder,}
+    {  --json and --markdown per folder. Human time is the transcript's own working}
+    {  time, machine time the span it ran over. Both are whole-session wall clock,}
+    {  so two sessions running at once count twice, and a session that only partly}
+    {  concerned the query counts whole; each surface says so beside its figures.}
 }
 $::questlog::cli::commandline::CL option --json -section output -selects json \
     -help {{Emit the full result as JSON, headless.}}
@@ -63,7 +69,9 @@ $::questlog::cli::commandline::CL option --markdown -section output -selects mar
            {its hits, rendered as reading-view turns.}}
 $::questlog::cli::commandline::CL option --shortstat -section output -selects shortstat \
     -help {{Emit a totals summary instead, headless: session and subagent}
-           {counts, turns, tokens, and total cost over the result.}}
+           {counts, turns, tokens, cost, human and machine time, the first and}
+           {last session and how many days hold one - over the whole result,}
+           {then again folder by folder, dearest first.}}
 
 # ---- context ---------------------------------------------------------------
 

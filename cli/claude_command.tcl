@@ -51,11 +51,13 @@ A session is returned when its clauses hold somewhere in its log. Clauses combin
 
 Bound the whole result with `--since <24h|7d|2w|2026-04-01|all>`, `--until <...>`, `--subtree <dir>` (sessions in the subtree of `<dir>`: the directory itself and everything below it), or `--limit <N>`. Use the words from the user's own request (a topic, a filename, a tool name), and reach for `--regex` only when a literal keyword will not do. The full clause and bound inventory is in `questlog --help`.
 
-The output is an array of project folders, each with its `sessions`, and each session its `subagents`. A folder carries `project_path` (the session's original directory); a session carries `uuid`, `path`, `title`, `first_ts`, `cost_usd`, `turns`, and the matched `matches` snippets. Slice it with `jq`; the `uuid` or `path` feeds the next step.
+The output is an array of project folders, each with its `sessions`, and each session its `subagents`. A folder carries `project_path` (the session's original directory) and `totals`; a session carries `uuid`, `path`, `title`, `first_ts`, `cost_usd`, `turns`, `duration_secs`, `human_secs`, and the matched `matches` snippets. Slice it with `jq`; the `uuid` or `path` feeds the next step.
+
+A folder's `totals` object sums that folder's matching sessions: `sessions`, `subagent_sessions`, `turns`, the four token counts, `cost_usd`, `human_secs` (working time) and `duration_secs` (the span the sessions ran over), `first_ts` and `last_ts`, and `days`, the number of distinct calendar days holding a matching session. Its `time_basis` field states what the time figures cannot know; quote it when reporting hours. Sum the folder totals with `jq` for the whole result, or ask `--shortstat` for it.
 
 ## Reading hits with their context
 
-`--json` is for slicing with `jq`; when the aim is to read the conversation around a match rather than pull fields from it, `--markdown` prints the same query as a document, each matching session with its hits as reading-view turns.
+`--json` is for slicing with `jq`; when the aim is to read the conversation around a match rather than pull fields from it, `--markdown` prints the same query as a document, each folder under its totals line, each matching session with its hits as reading-view turns.
 
 ```bash
 questlog --markdown --since 7d --keyword "stripe webhook"
@@ -88,7 +90,13 @@ questlog --json --dialogue:user --since 7d --keyword "refund flow"
 questlog --shortstat --since 7d
 ```
 
-Emits session and subagent counts, turns, token categories, and total cost over the same result set the matching `--json` query would return. Cost is the recorded tokens priced at per-model API rates, an API-equivalent figure rather than a number the harness billed. Add `--accrued-cost` (with a time bound) to count only the spend dated inside the window instead of each matching session's whole-transcript cost.
+Emits session and subagent counts, turns, token categories, total cost, human and machine time, the first and last matching session and how many days hold one - over the same result set the matching `--json` query would return, and then again folder by folder, dearest first. This is the way to answer "what has this project cost me, in money and in hours": bound it with `--subtree <dir>` for one project.
+
+```bash
+questlog --shortstat --since all --subtree ~/code/proj
+```
+
+Cost is the recorded tokens priced at per-model API rates, an API-equivalent figure rather than a number the harness billed. Add `--accrued-cost` (with a time bound) to count only the spend dated inside the window instead of each matching session's whole-transcript cost. Human and machine time are whole-session figures: two sessions running at once count twice over, and a session that only partly concerned the query counts whole. Pass those caveats on with the hours; the output states them.
 
 ## Reopening and renaming
 
