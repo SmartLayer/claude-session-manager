@@ -79,13 +79,9 @@ proc ::questlog::cli::main::format_secs {secs} {
 # under each folder heading. Its keys are the shortstat stats dict's keys, so
 # there is one name per number rather than one per surface.
 #
-# The caveat below travels with the figures, not with the documentation, because
-# a reader meets a total at the moment they need to distrust it: human_secs and
-# duration_secs are scalars per session, so two terminals running at once sum to
-# twice the wall clock, and a whole-session figure credits the whole session to
-# whatever the query asked about. A subagent's run is the one overlap the sum
-# does know about, and says so: it lies inside a Task bracket its parent's
-# figures already cover.
+# The caveat below travels with the figures, not with the documentation,
+# because a reader meets a total at the moment they need to distrust it;
+# TimeCaveat states what to distrust and why.
 namespace eval ::questlog::cli::main {
     variable TimeCaveat "whole-session wall clock: concurrent sessions double\
 count, a subagent's time is its parent's and is not added again, and a session\
