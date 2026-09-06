@@ -168,6 +168,15 @@ $SL selection_set $a03
 $SL selection_range $b01
 check "a shut folder between the clicks contributes nothing" [sel] [lsort [list $a03 $b01]]
 
+# A row a filter has just hidden keeps its line until the debounced rebuild
+# takes it (reconcile_one sets the flag and schedules the rebuild); a range
+# crossing it in that window must not take it either.
+$SL sflagset $a02 hidden 1
+$SL selection_set $a01
+$SL selection_range $a03
+check "a hidden row still on its line is left out of the run" [sel] [lsort [list $a01 $a03]]
+$SL sflagset $a02 hidden 0
+
 # An anchor whose row has gone (its folder shut since) re-anchors at the click.
 $SL toggle_folder $FM
 update

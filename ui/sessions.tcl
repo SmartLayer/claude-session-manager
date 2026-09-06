@@ -2888,9 +2888,11 @@ oo::class create ::questlog::ui::SessionList {
     # session's and not selected either. Only drawn rows are in the run, so a
     # shut folder between the two clicks contributes none of its sessions and
     # a filtered-out row is never touched: a range selection or a batch action
-    # must never reach a session the reader cannot see. An anchor with no row
-    # (its folder shut since) re-anchors here. The anchor stays put so
-    # dragging the endpoint grows or shrinks the run from the same origin.
+    # must never reach a session the reader cannot see. A row a filter has
+    # hidden keeps its line until the debounced rebuild takes it, so the
+    # hidden flag is checked as well as the row. An anchor with no row (its
+    # folder shut since) re-anchors here. The anchor stays put so dragging the
+    # endpoint grows or shrinks the run from the same origin.
     method selection_range {path} {
         set rows [my all_rendered_nodes]
         set ia [expr {$SelectAnchor eq "" ? -1 : [lsearch -exact $rows $SelectAnchor]}]
@@ -2899,7 +2901,9 @@ oo::class create ::questlog::ui::SessionList {
         if {$ia > $ib} { lassign [list $ib $ia] ia ib }
         set run [list]
         foreach id [lrange $rows $ia $ib] {
-            if {[my node_field $id kind] eq "session"} { lappend run [my node_field $id key] }
+            if {[my node_field $id kind] eq "session" && ![my node_field $id hidden]} {
+                lappend run [my node_field $id key]
+            }
         }
         my set_selection $run
     }
