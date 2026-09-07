@@ -3,11 +3,9 @@
 #
 # The folder heading's: "Search within this folder" bounds the search to that
 # cwd, so a folder whose directory cannot be resolved ("" from the resolver)
-# must grey it out like "Reveal folder" - the old gate checked only the
-# callback's presence, which in the wired app is always true, and the click
-# then fell into on_folder_bound's silent empty-cwd return. A folder whose
-# directory is gone resolves to the path it had: the search still bounds by
-# it, the reveal has nowhere to go.
+# must grey it out like "Reveal folder". A folder whose directory is gone
+# resolves to the path it had: the search still bounds by it, the reveal has
+# nowhere to go.
 #
 # The session row's: a resume runs `cd` into the project directory, so the
 # three resume entries and the Ctrl+R copy need a directory that exists; a
