@@ -111,7 +111,7 @@ The check is not free: every audited primitive walks the whole store, the drawn 
 
 ## PERFORMANCE
 
-Measured September 2026 on the 0.7.0 release (medians of 3, min-max in parentheses) on an Intel Core Ultra 7 258V under Xvfb software rendering, Tcl/Tk 9.0.3, by `bench-streamtree.tcl` beside the module. The streaming row is the median of three whole-bench runs pinned to the machine's performance cores; unpinned, a run that lands on an efficiency core carries a p95 half again as large, which measures the core it drew rather than the widget. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
+Measured September 2026 on the 0.7.0 release (medians of 3, min-max in parentheses) on an Intel Core Ultra 7 258V under Xvfb software rendering, Tcl/Tk 9.0.3, by `bench-streamtree.tcl`, which sits beside the module's source in its home repository and does not travel with a vendored copy. The streaming row is the median of three whole-bench runs pinned to the machine's performance cores; unpinned, a run that lands on an efficiency core carries a p95 more than twice as large, which measures the core it drew rather than the widget. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
 
 | scenario | N | median (min-max) | per row | notes |
 |---|---|---|---|---|
