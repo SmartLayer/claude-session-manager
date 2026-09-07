@@ -17,6 +17,7 @@ set ::env(TZ) UTC
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
 ::tcl::tm::path add [file join $ROOT modules]
 ::tcl::tm::path add [file join $ROOT vendor]
+set ::questlog_config_only 1; source [file join $ROOT questlog]
 source [file join $ROOT lib cost.tcl]
 source [file join $ROOT cli main.tcl]
 set failures 0
@@ -128,6 +129,9 @@ check "format_totals_json: the time caveat travels with the figures" \
     [expr {[string match "*double count*" [dict get $jd time_basis]]
         && [string match "*subagent*" [dict get $jd time_basis]]
         && [string match "*counts whole*" [dict get $jd time_basis]]}] 1
+check "format_totals_json: the human-gap rule in force rides in time_basis" \
+    [string match "*up to 30 min counts in full, a longer one as 5 min*" \
+        [dict get $jd time_basis]] 1
 
 set line [::questlog::cli::main::totals_line $m]
 check "totals_line: counts, times, cost, span and days on one line" $line \
@@ -140,8 +144,8 @@ check "totals_line: a single-day result prints the day once, and counts singly" 
 set ss [::questlog::cli::main::format_shortstat $m 0 \
     [list [list /home/user/cheap $a [dict get $a cost_usd]] \
           [list /home/user/dear $b [dict get $b cost_usd]]]]
-check "shortstat: human time is named and formatted" \
-    [regexp -- {(?m)^human time         12:30$} $ss] 1
+check "shortstat: human time is named and formatted, the rule that made it beside it" \
+    [regexp -- {(?m)^human time         12:30 \(a pause of up to 30 min counts in full, a longer one as 5 min\)$} $ss] 1
 check "shortstat: machine time is named and formatted" \
     [regexp -- {(?m)^machine time       26:40$} $ss] 1
 check "shortstat: the first and last matching session are dated" \
@@ -235,6 +239,40 @@ check "cli --shortstat: machine time is the sum of both sessions, the subagent's
 check "cli --shortstat: both folders appear in the breakdown" \
     [expr {[regexp -- {-home-test-code-proj} $sstat]
         && [regexp -- {-home-test-code-other} $sstat]}] 1
+
+# The human-gap rule reaches the fold from the command line. One session with
+# a twenty-minute pause between its two prompts, a minute of machine time on
+# each side: under the default rule the pause is composing time in full.
+write_session [file join $CORPUS -home-test-code-pause \
+        33333333-3333-3333-3333-333333333333.jsonl] [list \
+    "{\"type\":\"user\",\"cwd\":\"/home/test/code/pause\",\"timestamp\":\"2026-06-21T10:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"pausemark open\"}}" \
+    "{\"type\":\"assistant\",\"timestamp\":\"2026-06-21T10:01:00.000Z\",\"message\":{$usage,\"content\":\"one\"}}" \
+    "{\"type\":\"user\",\"cwd\":\"/home/test/code/pause\",\"timestamp\":\"2026-06-21T10:21:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"pausemark again\"}}" \
+    "{\"type\":\"assistant\",\"timestamp\":\"2026-06-21T10:22:00.000Z\",\"message\":{$usage,\"content\":\"two\"}}"]
+# Enough files in the corpus (two per worker, at most eight workers) that the
+# CLI prices on its worker pool, whose interps must carry the moved rule too.
+for {set i 0} {$i < 16} {incr i} {
+    write_session [file join $CORPUS -home-test-code-filler \
+            [format 44444444-4444-4444-4444-4444444444%02d.jsonl $i]] [list \
+        "{\"type\":\"user\",\"cwd\":\"/home/test/code/filler\",\"timestamp\":\"2026-06-21T11:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"filler\"}}" \
+        "{\"type\":\"assistant\",\"timestamp\":\"2026-06-21T11:00:30.000Z\",\"message\":{$usage,\"content\":\"filler\"}}"]
+}
+proc human_of {args} {
+    set out [::json::json2dict [run_cli --json --keyword pausemark --since all {*}$args]]
+    return [dict get [lindex [dict get [lindex $out 0] sessions] 0] human_secs]
+}
+check "cli: a pause under the threshold is human time in full" [human_of] 1200
+check "cli: --human-gap at the pause's own length still counts it whole" \
+    [human_of --human-gap 20] 1200
+check "cli: a bare --human-gap below the pause credits the credit in force" \
+    [human_of --human-gap 10] 300
+check "cli: --human-gap threshold,credit credits the credit given" \
+    [human_of --human-gap 10,2] 120
+check "cli --shortstat: the line names the rule that made its figure" \
+    [regexp -- {(?m)^human time         02:00 \(a pause of up to 10 min counts in full, a longer one as 2 min\)$} \
+        [run_cli --shortstat --keyword pausemark --since all --human-gap 10,2]] 1
+check "cli: a threshold under the credit in force is refused, not folded" \
+    [expr {[catch {run_cli --json --keyword pausemark --human-gap 3}]}] 1
 file delete -force $TMP
 
 if {$failures > 0} {

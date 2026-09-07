@@ -10,6 +10,7 @@ package require Tcl 9
 set ROOT [file dirname [file dirname [file normalize [info script]]]]
 ::tcl::tm::path add [file join $ROOT modules]
 ::tcl::tm::path add [file join $ROOT vendor]
+set ::questlog_config_only 1; source [file join $ROOT questlog]
 source [file join $ROOT lib cost.tcl]
 source [file join $ROOT cli main.tcl]
 set failures 0

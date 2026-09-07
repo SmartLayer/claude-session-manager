@@ -6,7 +6,7 @@ package require tallyman
 # tallyman does the computation (parse token usage from transcript lines, price
 # per model, split the wall clock). This file owns questlog's I/O around it: it
 # reads the rate CSV into the rates dict tallyman prices against, reads a
-# transcript's lines off disk to hand in, and supplies the human-gap cap from
+# transcript's lines off disk to hand in, and supplies the human-gap rule from
 # config. The pure formatters are tallyman's, re-exported here under the names
 # the UI and CLI already call.
 
@@ -73,15 +73,29 @@ proc ::questlog::cost::parse_file {path} {
     return [tallyman::parse_lines $lines]
 }
 
-# Supply the config-driven human-gap cap and the loaded rate table, then price.
+# The human-gap rule from config, {threshold credit} in the seconds tallyman's
+# split_secs reads.
+proc ::questlog::cost::human_gap {} {
+    return [list [expr {60 * [::questlog::config::get cost_human_gap_threshold_min]}] \
+                 [expr {60 * [::questlog::config::get cost_human_gap_credit_min]}]]
+}
+
+# The rule in force as one clause, for the surfaces that show a human-time
+# figure (the A/H heading's reveal, --shortstat's line, --json's time_basis):
+# a reader meets the values that made the figure where they meet the figure.
+proc ::questlog::cost::human_gap_rule {} {
+    return "a pause of up to [::questlog::config::get cost_human_gap_threshold_min] min\
+        counts in full, a longer one as [::questlog::config::get cost_human_gap_credit_min] min"
+}
+
+# Supply the config-driven human-gap rule and the loaded rate table, then price.
 proc ::questlog::cost::build_cost_dict {res} {
     variable Rates
-    set cap [expr {60 * [::questlog::config::get cost_human_gap_cap_min]}]
-    return [tallyman::build_cost_dict $res $Rates $cap]
+    return [tallyman::build_cost_dict $res $Rates {*}[human_gap]]
 }
 
 # Windowed spend for `--accrued-cost`: read the transcript's lines, supply the
-# cap and rate table, and let tallyman anchor each request in [lo, hi].
+# rule and rate table, and let tallyman anchor each request in [lo, hi].
 proc ::questlog::cost::accrue_window {path lo hi} {
     variable Rates
     if {[catch {open $path r} fh]} {
@@ -91,6 +105,5 @@ proc ::questlog::cost::accrue_window {path lo hi} {
     chan configure $fh -encoding utf-8 -profile replace
     set lines [split [read $fh] "\n"]
     close $fh
-    set cap [expr {60 * [::questlog::config::get cost_human_gap_cap_min]}]
-    return [tallyman::accrue_lines $lines $lo $hi $Rates $cap]
+    return [tallyman::accrue_lines $lines $lo $hi $Rates {*}[human_gap]]
 }

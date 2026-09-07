@@ -29,21 +29,28 @@ proc check {name got want} {
 # ---- duration helpers ----------------------------------------------------
 
 # split_secs partitions the wall clock by the class of the record ending each
-# gap: machine gaps count in full, human gaps count as composing time up to
-# the cap (here passed as 300s), neutral gaps count for neither side. So a
-# resume long after the last reply credits at most one cap of human time.
+# gap: machine gaps count in full, a human gap is composing time in full up
+# to the threshold (here 300s) and worth the credit (here 60s) beyond it,
+# neutral gaps count for neither side. So a resume long after the last reply
+# credits one return of human time, however long the absence.
 check "split_secs sums machine gaps inside a turn" \
-    [::questlog::cost::split_secs {{0 human} {10 machine} {40 machine}} 300] {40 0}
-check "split_secs credits a short human gap in full" \
-    [::questlog::cost::split_secs {{0 human} {10 machine} {130 human}} 300] {10 120}
-check "split_secs clips a long human gap to the cap" \
-    [::questlog::cost::split_secs {{0 human} {10 machine} {1000000 human} {1000030 machine}} 300] {40 300}
+    [::questlog::cost::split_secs {{0 human} {10 machine} {40 machine}} 300 60] {40 0}
+check "split_secs counts a human gap under the threshold in full" \
+    [::questlog::cost::split_secs {{0 human} {10 machine} {130 human}} 300 60] {10 120}
+check "split_secs counts a human gap at the threshold in full" \
+    [::questlog::cost::split_secs {{0 human} {10 machine} {310 human}} 300 60] {10 300}
+check "split_secs credits a human gap over the threshold the credit" \
+    [::questlog::cost::split_secs {{0 human} {10 machine} {311 human}} 300 60] {10 60}
+check "split_secs credits a night away one credit, however long" \
+    [::questlog::cost::split_secs {{0 human} {10 machine} {1000000 human} {1000030 machine}} 300 60] {40 60}
+check "split_secs credits nothing for a return when the credit is 0" \
+    [::questlog::cost::split_secs {{0 human} {10 machine} {1000000 human}} 300 0] {10 0}
 check "split_secs credits a neutral gap to neither side" \
-    [::questlog::cost::split_secs {{0 human} {10 machine} {500 neutral} {510 machine}} 300] {20 0}
+    [::questlog::cost::split_secs {{0 human} {10 machine} {500 neutral} {510 machine}} 300 60] {20 0}
 check "split_secs sorts before summing" \
-    [::questlog::cost::split_secs {{10 machine} {0 human}} 300] {10 0}
+    [::questlog::cost::split_secs {{10 machine} {0 human}} 300 60] {10 0}
 check "split_secs blank under two stamps" \
-    [::questlog::cost::split_secs {{0 human}} 300] {{} {}}
+    [::questlog::cost::split_secs {{0 human}} 300 60] {{} {}}
 
 check "fmt_dur under an hour"   [::questlog::cost::fmt_dur 2588] "43:08"
 check "fmt_dur pads minutes"    [::questlog::cost::fmt_dur 125]  "02:05"
@@ -141,8 +148,8 @@ file delete $fix
 # record whose content is an array (must NOT count as a turn), two assistant
 # records, spanning 10:00:00 to 10:43:08. Of that 43:08 span, the gaps before
 # the second (10:10:00->10:20:00) and third (10:30:00->10:43:08) prompts are
-# the session waiting for the user, leaving 20:00 of machine work; each of
-# the two waits credits the 5-minute composing cap, 10:00 of human time.
+# the session waiting for the user, leaving 20:00 of machine work; both waits
+# sit under the 30-minute threshold, so they are human time whole, 23:08.
 set fd [file tempfile fix]
 puts $fd {{"type":"user","timestamp":"2026-04-25T10:00:00.000Z","message":{"role":"user","content":"first prompt"}}}
 puts $fd {{"type":"assistant","timestamp":"2026-04-25T10:00:05.000Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50}}}}
@@ -165,8 +172,8 @@ check "last_ts is the latest record"      [dict get $r last_ts]  2026-04-25T10:4
 set cost_dict [::questlog::cli::cost::compute_sync $fix]
 check "machine duration from the fixture (waits before prompts excluded)" \
     [::questlog::cost::fmt_dur [dict get $cost_dict duration_secs]] "20:00"
-check "human time from the fixture (two waits, each capped)" \
-    [::questlog::cost::fmt_dur [dict get $cost_dict human_secs]] "10:00"
+check "human time from the fixture (two waits under the threshold, whole)" \
+    [::questlog::cost::fmt_dur [dict get $cost_dict human_secs]] "23:08"
 check "cost dict carries the formatted model label" \
     [dict get $cost_dict model] "Opus 4.8"
 file delete $fix

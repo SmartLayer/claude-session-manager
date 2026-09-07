@@ -99,11 +99,14 @@ namespace eval ::questlog::config {
     # rebuild when arrivals pause and the list stays still (in arrival order)
     # while they stream, instead of wiping on every coalesced batch.
     dict set Config resort_debounce_ms 250
-    # Composing-time cap for the human side of the duration split, in minutes.
-    # A gap that ends at a human record (a typed prompt, a dialog answer)
-    # counts as human time up to this cap; a longer gap means the user was
-    # away, and the excess counts as nobody's time.
-    dict set Config cost_human_gap_cap_min 5
+    # The human-gap rule for the human side of the duration split, in minutes.
+    # A gap that ends at a human record (a typed prompt, a dialog answer) is
+    # composing time in full up to the threshold; a longer gap is the user
+    # away and back, worth the credit. Calibrated once, against one user's
+    # recollection of four sessions (issue #76). --human-gap and the toolbar's
+    # ⋯ menu move both.
+    dict set Config cost_human_gap_threshold_min 30
+    dict set Config cost_human_gap_credit_min    5
 
     # ---- search render -----------------------------------------------------
     # How found sessions reach the list as a search runs. coalesced = buffer the
@@ -298,6 +301,12 @@ set Query [::questlog::cli::commandline::run $argv]
 set QL_DEBUG [dict get $Query debug]
 dict set ::questlog::config::Config debug_enabled $QL_DEBUG
 if {$QL_DEBUG ne "0" && $QL_DEBUG ne ""} { ::questlog::debug::enable }
+
+# The human-gap rule the query carries (--human-gap, else the config default
+# it read) goes back to config, where every cost pass reads it.
+lassign [dict get $Query human_gap] hg_threshold hg_credit
+dict set ::questlog::config::Config cost_human_gap_threshold_min $hg_threshold
+dict set ::questlog::config::Config cost_human_gap_credit_min $hg_credit
 
 # The match procs read the display caps from config; inject them once for this
 # interp (each worker gets its own copy via worker_prelude).

@@ -162,7 +162,22 @@ check headless_font {--font is not available with --json (the reading font is th
 # accepted, printed in the help, and inert.
 check no_inert_option "" [refusal --json --keyword a --regex b --tool:read c \
     --or --not --keyword d --since 7d --until 1d --subtree / --accrued-cost \
-    --limit 3 --limit-matches 2 --case --debug 1]
+    --limit 3 --limit-matches 2 --case --debug 1 --human-gap 30,5]
+
+# ---- the human-gap rule: the config default unless --human-gap moves it ----
+check human_gap_default {30 5} [dict get [parse --keyword x] human_gap]
+check human_gap_both {20 2} [dict get [parse --human-gap 20,2 --keyword x] human_gap]
+# A bare threshold moves the calibrated knob alone; the credit stays.
+check human_gap_bare {45 5} [dict get [parse --human-gap 45 --keyword x] human_gap]
+check human_gap_not_minutes {--human-gap: not a count of minutes: '5m'} \
+    [refusal --human-gap 5m --keyword x]
+check human_gap_three_parts {--human-gap: want <threshold>[,<credit>] in minutes, not '1,2,3'} \
+    [refusal --human-gap 1,2,3 --keyword x]
+check human_gap_inverted {--human-gap: the credit (10 min) exceeds the threshold (5 min); give both, e.g. 5,5} \
+    [refusal --human-gap 5,10 --keyword x]
+check human_gap_bare_under_credit \
+    {--human-gap: the credit (5 min) exceeds the threshold (3 min); give both, e.g. 3,3} \
+    [refusal --human-gap 3 --keyword x]
 
 if {$fails > 0} {
     puts "$fails failures"

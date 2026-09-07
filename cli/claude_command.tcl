@@ -90,7 +90,7 @@ questlog --json --dialogue:user --since 7d --keyword "refund flow"
 questlog --shortstat --since 7d
 ```
 
-Emits session and subagent counts, turns, token categories, total cost, human and machine time, the first and last matching session and how many days hold one - over the same result set the matching `--json` query would return, and then again folder by folder, dearest first. This is the way to answer "what has this project cost me, in money and in hours": bound it with `--subtree <dir>` for one project.
+Emits session and subagent counts, turns, token categories, total cost, human and machine time, the first and last matching session and how many days hold one - over the same result set the matching `--json` query would return, and then again folder by folder, dearest first. This is the way to answer "what has this project cost me, in money and in hours": bound it with `--subtree <dir>` for one project. Human time counts a pause before a prompt in full up to a threshold and a longer one as a fixed credit; the line prints the values in force, and `--human-gap <min>[,<min>]` moves them.
 
 ```bash
 questlog --shortstat --since all --subtree ~/code/proj

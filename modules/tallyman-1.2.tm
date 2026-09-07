@@ -1,7 +1,7 @@
 package require Tcl 9
 package require json
 package require logman
-package provide tallyman 1.1
+package provide tallyman 1.2
 
 # tallyman - prices a Claude Code session's token usage.
 #
@@ -29,13 +29,14 @@ package provide tallyman 1.1
 # by taking the max usage across them.
 #
 #   set res   [tallyman::parse_lines $lines]     ;# lines: a list of JSONL lines
-#   set costd [tallyman::build_cost_dict $res $rates $cap]
+#   set costd [tallyman::build_cost_dict $res $rates $threshold $credit]
 #   dict get $costd cost_usd
-#     ;# $cap is the human-gap cap in seconds (see split_secs): a pause longer
-#     ;# than $cap counts as at most $cap of composing time, the rest as away.
+#     ;# $threshold and $credit, in seconds, are the human-gap rule (see
+#     ;# split_secs): a pause up to $threshold is composing time in full, a
+#     ;# longer one is the user away and back, worth $credit.
 #
 # For spend inside a date window rather than the whole transcript, use
-#   accrue_lines $lines $lo $hi $rates $cap
+#   accrue_lines $lines $lo $hi $rates $threshold $credit
 # where lo/hi are epoch-second window bounds (hi "" for no upper edge).
 #
 # Rates dict: model -> sorted list of {effective_from in out cw cr}, each rate
@@ -167,13 +168,16 @@ proc tallyman::model_family {id} {
 # {epoch class} pairs in any order; the class of the record that ENDS a gap
 # decides whose time the gap is. machine (model output, tool runs, subagent
 # activity inside a turn) counts in full. human (the session waiting for the
-# user: a typed prompt, a dialog answer) counts as composing time up to `cap`
-# seconds; beyond the cap the user was away, and the excess is nobody's time,
-# so resuming a session after hours or days credits at most one cap. neutral
-# (harness records written during the user's absence or at the moment of
-# return) counts for neither side. Returns {machine human}, both blank when
-# fewer than two records carry a timestamp.
-proc tallyman::split_secs {stamps cap} {
+# user: a typed prompt, a dialog answer) is composing time in full when the
+# gap is at most `threshold` seconds - reading, thinking, a form filled in
+# between two prompts; a longer gap means the user went away and came back,
+# and is worth `credit` seconds however long it ran, so resuming a session
+# after hours or days credits one return. A single cap cannot serve both
+# pauses: it discards most of a twenty-minute pause or inflates a night
+# away. neutral (harness records written during the user's absence or at
+# the moment of return) counts for neither side. Returns {machine human},
+# both blank when fewer than two records carry a timestamp.
+proc tallyman::split_secs {stamps threshold credit} {
     if {[llength $stamps] < 2} { return [list "" ""] }
     set stamps [lsort -integer -index 0 $stamps]
     set machine 0
@@ -184,7 +188,7 @@ proc tallyman::split_secs {stamps cap} {
         set gap [expr {$e - $prev}]
         switch -- $class {
             machine { incr machine $gap }
-            human   { incr human [expr {min($gap, $cap)}] }
+            human   { incr human [expr {$gap <= $threshold ? $gap : $credit}] }
         }
         set prev $e
     }
@@ -370,14 +374,14 @@ proc tallyman::parse_lines {lines} {
         ok 1]
 }
 
-# A parse_lines result + the rate table + the human-gap cap (seconds) -> the
-# caller-facing cost dict:
+# A parse_lines result + the rate table + the human-gap rule (threshold and
+# credit, seconds, as split_secs reads them) -> the caller-facing cost dict:
 #   {cost_usd input_tokens output_tokens cache_write_tokens cache_read_tokens
 #    model_breakdown model turns duration_secs human_secs context_pct}
 # context_pct is ctx_tokens as a whole percentage of ctx_model's window, ""
 # when the transcript carries no usage at all (an empty or windowed result),
 # so the cell reads as "no figure" rather than a false 0%.
-proc tallyman::build_cost_dict {res rates cap} {
+proc tallyman::build_cost_dict {res rates threshold credit} {
     if {![dict get $res ok]} {
         return [dict create cost_usd 0.0 turns 0 duration_secs 0 human_secs 0 input_tokens 0 output_tokens 0 cache_write_tokens 0 cache_read_tokens 0 model_breakdown {} model "" context_pct ""]
     }
@@ -395,7 +399,7 @@ proc tallyman::build_cost_dict {res rates cap} {
         lassign $c i o w r
         incr in $i; incr out $o; incr cw $w; incr cr $r
     }
-    lassign [split_secs [dict get $res stamps] $cap] active human
+    lassign [split_secs [dict get $res stamps] $threshold $credit] active human
     set ctx [dict getdef $res ctx_tokens ""]
     set ctx_pct [expr {$ctx eq "" ? "" : round(100.0 * $ctx \
         / [model_context_window [dict getdef $res ctx_model ""]])}]
@@ -424,7 +428,7 @@ proc tallyman::build_cost_dict {res rates cap} {
 # out); hi is the inclusive ceiling, or "" for no upper edge. Returns the
 # build_cost_dict shape with every field windowed; an empty model_breakdown
 # (cost_usd -1.0) with turns 0 marks a window with no in-window spend.
-proc tallyman::accrue_lines {lines lo hi rates cap} {
+proc tallyman::accrue_lines {lines lo hi rates threshold credit} {
     set req_usage [dict create]
     set dummy_req 0
     set turns 0
@@ -508,5 +512,6 @@ proc tallyman::accrue_lines {lines lo hi rates cap} {
         : [clock format $anchor_min -gmt 1 -format %Y-%m-%d]}]
 
     return [build_cost_dict [dict create per_model $per_model first_ts $first_ts \
-        last_ts "" turns $turns stamps $stamps last_model $last_model ok 1] $rates $cap]
+        last_ts "" turns $turns stamps $stamps last_model $last_model ok 1] \
+        $rates $threshold $credit]
 }

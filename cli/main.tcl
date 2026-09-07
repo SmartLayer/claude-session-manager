@@ -88,6 +88,14 @@ count, a subagent's time is its parent's and is not added again, and a session\
 that only partly concerned the query counts whole"
 }
 
+# The caveat with the human-gap rule in force behind it: what --json's
+# time_basis carries and --markdown closes on, so a consumer reading only the
+# totals still reads the values that made the human figure.
+proc ::questlog::cli::main::time_basis {} {
+    variable TimeCaveat
+    return "$TimeCaveat; human time: [::questlog::cost::human_gap_rule] (--human-gap)"
+}
+
 proc ::questlog::cli::main::totals_zero {} {
     return [dict create sessions 0 subagents 0 turns 0 \
         input_tokens 0 output_tokens 0 cache_write_tokens 0 cache_read_tokens 0 \
@@ -164,7 +172,7 @@ proc ::questlog::cli::main::format_totals_json {tot} {
         [dict get $tot cache_write_tokens] [dict get $tot cache_read_tokens] \
         [dict get $tot cost_usd] [dict get $tot human_secs] [dict get $tot duration_secs] \
         [escape_json [dict get $tot first_ts]] [escape_json [dict get $tot last_ts]] \
-        [dict size [dict get $tot days]] [escape_json $::questlog::cli::main::TimeCaveat]]
+        [dict size [dict get $tot days]] [escape_json [time_basis]]]
 }
 
 # An accumulator as one middot-separated line, for the surfaces meant to be
@@ -263,7 +271,8 @@ proc ::questlog::cli::main::format_shortstat {stats limit {folders {}}} {
     lappend lines [format "cache write tokens %s"    [dict get $stats cache_write_tokens]]
     lappend lines [format "cache read tokens  %s"    [dict get $stats cache_read_tokens]]
     lappend lines [format "total cost         \$%.2f" [dict get $stats cost_usd]]
-    lappend lines [format "human time         %s"    [::questlog::cost::fmt_dur [dict get $stats human_secs]]]
+    lappend lines [format "human time         %s (%s)" \
+        [::questlog::cost::fmt_dur [dict get $stats human_secs]] [::questlog::cost::human_gap_rule]]
     lappend lines [format "machine time       %s"    [::questlog::cost::fmt_dur [dict get $stats duration_secs]]]
     lappend lines [format "first session      %s"    [local_day [dict get $stats first_ts]]]
     lappend lines [format "last session       %s"    [local_day [dict get $stats last_ts]]]
@@ -369,7 +378,7 @@ proc ::questlog::cli::main::format_markdown {folders_dict} {
     # The caveat closes the document rather than heading each folder: it holds
     # for every figure above it, and repeating it per folder would drown them.
     if {[dict size $folders_dict]} {
-        lappend out "---" "*Totals are $::questlog::cli::main::TimeCaveat.*"
+        lappend out "---" "*Totals are [time_basis].*"
     }
     return [join $out "\n"]
 }
@@ -564,14 +573,17 @@ proc ::questlog::cli::main::worker_count {} {
 # lazily spawns (issue #56), so the pass would run serially through it. Each
 # worker sources the matcher (via worker_prelude, which also bakes the display
 # caps) and the cost layer, then loads the rate table, so it can price a file
-# whole rather than shipping raw token tallies back. Built once, reused for both
-# phases; the caller releases it.
+# whole rather than shipping raw token tallies back. Its config is this
+# interp's as it stands, not a fresh read of the launcher's defaults: a rule
+# the command line moved (--human-gap) has to price in the worker as it does
+# here. Built once, reused for both phases; the caller releases it.
 proc ::questlog::cli::main::worker_pool {n} {
     if {$n <= 0} { return "" }
     set root $::ROOT
     set initcmd "::tcl::tm::path add [list [file join $root modules]]
 ::tcl::tm::path add [list [file join $root vendor]]
 set ::questlog_config_only 1; source [list [file join $root questlog]]
+set ::questlog::config::Config [list $::questlog::config::Config]
 [::questlog::search::worker_prelude $root]
 source [list [file join $root lib cost.tcl]]
 source [list [file join $root cli cost.tcl]]

@@ -74,6 +74,17 @@ $::questlog::cli::commandline::CL option --shortstat -section output -selects sh
            {last session and how many days hold one - over the whole result,}
            {then again folder by folder, dearest first.}}
 
+# The rule is read in every mode: the GUI seeds its ⋯ menu from it. A bare
+# threshold keeps the credit in force, so the calibrated knob moves alone.
+$::questlog::cli::commandline::CL option --human-gap -section output -arg {min[,min]} \
+    -check {::questlog::cli::commandline::check_human_gap $value} \
+    -fold {lassign [split $value ,] hg_t hg_c
+           set human_gap [list $hg_t [expr {$hg_c eq "" ? [lindex $human_gap 1] : $hg_c}]]} \
+    -help [list {How a pause before a prompt counts as human time: in full up} \
+                {to the first count of minutes, and as the second (the user} \
+                "went away and came back) when longer. Default\
+                [::questlog::config::get cost_human_gap_threshold_min],[::questlog::config::get cost_human_gap_credit_min]."]
+
 # ---- context ---------------------------------------------------------------
 
 $::questlog::cli::commandline::CL section context {context (--json/--markdown; whole messages around each hit):}
@@ -292,6 +303,28 @@ proc ::questlog::cli::commandline::check_count {flag value allow_all} {
     return ""
 }
 
+# Two counts of minutes, the credit no more than the threshold: above it a
+# longer pause would be worth more than a shorter one. A bare threshold is
+# held against the credit in force, so `--human-gap 3` under the default 5
+# is refused rather than folded into that inversion.
+proc ::questlog::cli::commandline::check_human_gap {value} {
+    set parts [split $value ,]
+    if {[llength $parts] > 2 || [lindex $parts 0] eq ""} {
+        return "--human-gap: want <threshold>\[,<credit>\] in minutes, not '$value'"
+    }
+    foreach n $parts {
+        if {![string is integer -strict $n] || $n < 0} {
+            return "--human-gap: not a count of minutes: '$n'"
+        }
+    }
+    lassign $parts t c
+    if {$c eq ""} { set c [::questlog::config::get cost_human_gap_credit_min] }
+    if {$c > $t} {
+        return "--human-gap: the credit ($c min) exceeds the threshold ($t min); give both, e.g. $t,$t"
+    }
+    return ""
+}
+
 # Canonicalise (tilde-expanded, absolute) so the bounds predicates compare
 # against the form Claude records as a cwd; an inexpandible ~user fails loud
 # instead of matching nothing.
@@ -327,6 +360,8 @@ proc ::questlog::cli::commandline::keyword_restriction {value suffix} {
 #                  dicts {kind keyword|regex|tool, ..., neg 0|1}
 #   since until subtree limit limit_matches accrued nocase ctx_before ctx_after
 #   dialogue dialogue_roles font debug
+#   human_gap      {threshold credit} in minutes, the config default unless
+#                  --human-gap moved it
 #
 # The grammar is an OR (--or) of AND-groups (adjacency) of optionally-negated
 # (--not) clauses; groups is the closed AND-groups and cur the one being built,
@@ -349,6 +384,8 @@ proc ::questlog::cli::commandline::parse {argv} {
     set ctx_after 0
     set dialogue 0
     set dialogue_roles [list]
+    set human_gap [list [::questlog::config::get cost_human_gap_threshold_min] \
+                        [::questlog::config::get cost_human_gap_credit_min]]
     set groups [list]
     set cur [list]
     set pending_neg 0
@@ -401,7 +438,7 @@ proc ::questlog::cli::commandline::parse {argv} {
         since $since until $until accrued $accrued nocase $nocase \
         ctx_before $ctx_before ctx_after $ctx_after \
         dialogue $dialogue dialogue_roles $dialogue_roles \
-        font $font debug $debug]
+        font $font debug $debug human_gap $human_gap]
 }
 
 # The query, or the conventional answer to a command line that does not carry
