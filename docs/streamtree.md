@@ -157,6 +157,84 @@ filter. What the control looks like, how a threshold is typed, and whether
 text matching belongs in a tree widget at all are undecided; the kind field
 in the declaration is the extension point when the design round happens.
 
+## CHANGES
+
+Newest release first, one entry per release, each saying what a host gains and
+what an existing subclass has to answer differently when it takes that release.
+The record starts at 0.4.0; anything earlier is in the commit log at the
+module's home repository alone.
+
+**0.7.0.** `arrival_in_order key dir` is now the only answer to whether a node
+streamed in this moment, last among its siblings, already sits where the active
+sort puts it. The base class used to answer that itself, for a `date` column
+descending it had no business knowing about; that assumption is gone and the
+hook's default says no, so every arrival schedules the debounced resort until a
+subclass names the sort its arrivals keep. A host with a date column, the one
+the old assumption served, now pays a rebuild per burst until it overrides the
+hook and vouches for that key and direction; a host under any other sort pays
+what it always paid. Vouch only for what the source guarantees: a yes for a
+sort the arrivals do not keep leaves the list out of order until the next
+rebuild. Also in this release: `move id ""` makes a node a root, last among
+them, where it used to error on the children of a parent that is no node;
+several `move`s inside one `batch` pay one rebuild at the batch's end rather
+than one each, and a moved node has no row until that end; `insert -pos {before
+id}` draws the row before that sibling's own row instead of at the parent's
+append point, so the view no longer disagrees with the store until a rebuild;
+and `move` ends in `check_invariant` under its own name, as every other
+primitive does.
+
+**0.6.0.** `node_aggregate id ?shown?` folds `aggregate_add` from
+`aggregate_seed` over a node and everything under it, parents before children,
+so a heading can carry the totals of its whole subtree and get both figures,
+everything and only what the hides leave, from one walk. Nothing is cached, so
+a move, a delete, a hide or a rewritten payload is in the next answer. The two
+hooks default to counting nodes, so a subclass that wants none of this changes
+nothing.
+
+**0.5.2.** Three fixes a nested host meets: `unhide` now seats the node last
+among its siblings in the store, matching where it draws the row, so a host
+reading the store back after an unhide finds it there and a later rebuild does
+not jump the row; `render_row` makes the widget editable itself and restores,
+so a subclass helper that calls it outside a `batch` no longer loses its line
+in silence and leaves the node's marks inverted; and the audit gate judges
+sibling disjointness in buffer order rather than store order, so a host that
+draws rows out of store order and lets the debounced resort seat them stops
+tripping the gate on healthy work. A genuine overlap still trips it.
+
+**0.5.1.** `insert` no longer asks `render_skip`. A skip derived from a node's
+content cannot be answered when the node is born, so `insert` draws on the
+structural half alone (not hidden, under a parent whose row is drawn and open)
+and the skip is asked only where a node is drawn with its content in place:
+`expand`, `unhide` and `rebuild`. A host whose skip reads its children, an
+empty folder's above all, gets its nodes drawn at birth again, which 0.5.0 had
+taken away. `expand` is the way back for a node the skip kept out: it draws the
+row when it is due, at the parent's append point, and seats the node last among
+its siblings for the resort to place, as any streamed row is.
+
+**0.5.0.** The tree is as deep as the consumer nests it. `all_rendered_nodes`,
+the cursor's roster, and the audit gate walk root to leaf, so a row at depth
+four is reachable from the keyboard and a child's region sliding out of its
+parent's now trips the gate. One predicate decides whether a row is due, and
+every drawing path asks it, so a skipped node stays out whichever primitive
+reaches it and a hidden root stays hidden through a rebuild. Two consequences
+for an existing subclass: `render_skip` is now asked on every draw rather than
+once per rebuild, so a skip that is expensive is paid per insert (0.5.1 takes
+`insert` back off that path); and `expand` draws a child's open subtree rather
+than one level, so a subclass overriding `render_subtree` to stop at a kind
+finds `expand` and `unhide` going through that override too. New to the
+subclass surface: `ancestors` and `descendants`, the `kind_rank` hook (which
+orders the runs of a mixed-kind sibling set and hands each run to
+`sort_siblings` on its own, so that hook now only ever sees one kind), `reveal`
+and `expand_subtree`.
+
+**0.4.0.** The keyboard walks the rows. The cursor is a node id and no more:
+`cursor`, `cursor_set`, `cursor_move` and `cursor_open` drive it, the arrows,
+Home and End step it over the drawn rows, and Right and Left open and shut the
+cursor's own node. Nothing is painted for it; a host that wants a selection to
+follow the keyboard moves its own through the new `-cursorcb`, fired
+`{new prev}` on every move. The list takes the focus for these keys, and the
+Text class bindtag stays off, so a toplevel's own accelerators still run.
+
 ## REQUIREMENTS
 
 Tcl 9 and Tk. The sibling of [streamdoc](streamdoc.md): a tree of rows here, a document of regions there, the same architecture.
