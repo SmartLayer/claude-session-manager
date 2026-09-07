@@ -1,7 +1,7 @@
 package require Tcl 9
 package require Tk
 package require leash
-package provide streamtree 0.7.0
+package provide streamtree 0.8.0
 
 namespace eval ::streamtree {}
 
@@ -36,13 +36,15 @@ namespace eval ::streamtree {}
 #
 # Anti-self-scroll: a streaming insert is bracketed by anchor_save /
 # anchor_restore, which pins the top visible line back to the top, so a late
-# insert above the viewport never shifts what the reader is on.
+# insert above the viewport never shifts what the reader is on. The pair
+# counts its depth, so only the outermost bracket saves and restores.
 #
 # The base class owns every text-mark mutation behind a treeview-style primitive
 # ensemble - insert/delete/detach/item/expand/collapse/hide/unhide/move/rebuild,
 # reveal and expand_subtree over a node's ancestors and descendants, the cursor
 # the keyboard walks (treeview's focus row), batch to run many under one
-# anchoring, plus reset and a content door
+# anchoring (begin_batch/end_batch for a run that spans callbacks), plus reset
+# and a content door
 # (append_open/emit/emit_window/append_close, and drop_loose to lift a tagged
 # run of it back out) for loose in-row content that is not itself a node. A
 # subclass drives the widget only through these and never touches the text
@@ -90,7 +92,8 @@ namespace eval ::streamtree {}
 #   Aggregation
 #     aggregate_seed             the value a subtree fold starts from
 #     aggregate_add acc id       that value with one node added into it; node_aggregate
-#                                folds it over a node and everything under it
+#                                folds it over a node and everything under it, once
+#                                per row build however many hooks ask
 #   Attributes
 #     attr_value node id         the value of a declared attribute on a node, read
 #                                through this one hook so the payload stays opaque;
@@ -166,21 +169,6 @@ namespace eval ::streamtree {}
 #                          the host handed build_filters.
 #   .streamtree_attrpop    the enum checklist popdown, one at a time.
 
-# Coerce a {pos align ...} tab spec to strictly increasing positive stops,
-# which Tk requires. Guards the degenerate column geometry a too-narrow width
-# (a build-time placeholder, or high DPI) can produce. Used by the metadata
-# strip's column layout.
-proc ::streamtree::sane_tabs {tabs} {
-    set out [list]
-    set prev 0
-    foreach {x align} $tabs {
-        if {$x <= $prev} { set x [expr {$prev + 1}] }
-        lappend out $x $align
-        set prev $x
-    }
-    return $out
-}
-
 oo::class create ::streamtree::StreamTree {
     # Deferred work (the debounced resort timer, the coalesced relayout idle) is
     # armed only through the leash verbs (my later / my forget), so a resort or
@@ -200,7 +188,10 @@ oo::class create ::streamtree::StreamTree {
     # Column geometry, measured once (the proportional list font is fixed) and
     # re-pinned on resize.
     variable ColTabs          ;# -tabs spec for a row (right-pinned metadata)
-    variable ColRightX        ;# right-edge x px per metadata column, for header click mapping
+    variable ColLaid          ;# ids of the columns the strip lays at this width: the
+                              ;# leading run of effective_column_spec that leaves the
+                              ;# subject its floor, the rest dropped from the right
+    variable ColRightX        ;# right-edge x px per laid column, for header click mapping
     variable ColW             ;# effective widths per metadata column, parallel to column_spec
     variable ColWMeasured     ;# measured-from-sample widths, the override-or-measured base
     variable ColWOverride     ;# col id -> user width px (a manual resize), else absent
@@ -212,11 +203,15 @@ oo::class create ::streamtree::StreamTree {
     variable ColHandles       ;# the visible vertical resize-handle rules over the header
     variable Opts             ;# widget options decoupling the base class from any host app
     variable SubjectMax       ;# px the subject may fill before the metadata block
-    variable FolderLabelMax   ;# px a root label may fill before the first tab stop
+    variable LabelMax         ;# px a label laying no cell of its own may fill before the first tab stop
     variable LayoutW          ;# Text width the current layout was computed for
     variable RelayoutPending  ;# 1 while a debounced relayout is queued
     variable BatchDepth       ;# how many batch brackets are open, 0 outside any
+    variable BatchState       ;# the widget's -state the outermost batch found, restored at its end
     variable RebuildPending   ;# 1 while an open batch holds a move's rebuild for its end
+    variable AnchorDepth      ;# how many anchor brackets are open, 0 outside any
+    variable RowBuild         ;# the node whose line build_line is building, "" outside one
+    variable RowFold          ;# dict shown -> that node's fold, taken on the first ask in the build
     variable SortKey          ;# active sort column id
     variable SortDir          ;# desc | asc
     variable ResortTimer      ;# leash token of the debounced resort, or "" when none is pending
@@ -290,11 +285,18 @@ oo::class create ::streamtree::StreamTree {
     #
     # What a node adds up to: the seed hook's value with the node and
     # everything under it taken in through the add hook, parents before
-    # children. Nothing is cached, so a move, a delete, a hide or a rewritten
-    # payload is in the next answer. With shown set, a hidden node's subtree
-    # is left out too; streamtree.md has the full contract.
+    # children. Nothing is kept past one row build, so a move, a delete, a
+    # hide or a rewritten payload is in the next answer. Within a build the
+    # node's own fold is taken on the first ask and handed to every later one:
+    # a heading's subject, cells and cell tags each ask, and the walk is paid
+    # once for the three. With shown set, a hidden node's subtree is left out
+    # too; streamtree.md has the full contract.
     method node_aggregate {id {shown 0}} {
-        return [my fold_subtree [my aggregate_seed] $id $shown]
+        if {$id ne $RowBuild} { return [my fold_subtree [my aggregate_seed] $id $shown] }
+        if {![dict exists $RowFold $shown]} {
+            dict set RowFold $shown [my fold_subtree [my aggregate_seed] $id $shown]
+        }
+        return [dict get $RowFold $shown]
     }
     # The fold's own walk, not a surface a host calls: node_aggregate seeds it
     # and every recursion carries the accumulator down.
@@ -539,6 +541,10 @@ oo::class create ::streamtree::StreamTree {
         $Text mark gravity TailMark right
         set BatchDepth 0
         set RebuildPending 0
+        set AnchorDepth 0
+        set RowBuild ""
+        set ColLaid [list]
+        set ColRightX [list]
     }
 
     # Text widget yview update: forward to the scrollbar, and edge-detect the
@@ -623,47 +629,53 @@ oo::class create ::streamtree::StreamTree {
     # width: the last column's right edge sits a hair inside the edge and each
     # earlier column stacks leftward by its width plus a gap, so the subject gets
     # whatever room is left before the leftmost column. Right tab stops put each
-    # cell's right edge on its stop. Called at build and on every resize; it only
-    # repositions (cheap), the per-row ellipsis refit is the separate relayout.
+    # cell's right edge on its stop. A strip too wide for the widget (a narrow
+    # pane, high DPI, the build-time placeholder width) drops columns from the
+    # right until the rest leave the subject its floor: the leading columns are
+    # the ones a host names first, and a stop past the left edge is one Tk
+    # refuses. Called at build and on every resize; it only repositions
+    # (cheap), the per-row ellipsis refit is the separate relayout.
     method layout_columns {} {
         set ColW [my effective_col_widths]
+        set ids [lmap col [my effective_column_spec] { lindex $col 0 }]
         set w [winfo width $Text]
         if {$w <= 1} { set w 600 }
         set cw [expr {$w - 16}]          ;# inside the 8px left/right -padx
-        set n [llength $ColW]
-        set rights [lrepeat $n 0]
-        set edge [expr {$cw - 6}]        ;# rightmost column's right edge
-        for {set i [expr {$n - 1}]} {$i >= 0} {incr i -1} {
-            lset rights $i $edge
-            set edge [expr {$edge - [lindex $ColW $i] - $ColGap}]
+        for {set n [llength $ColW]} {$n >= 0} {incr n -1} {
+            set rights [lrepeat $n 0]
+            set edge [expr {$cw - 6}]    ;# rightmost column's right edge
+            for {set i [expr {$n - 1}]} {$i >= 0} {incr i -1} {
+                lset rights $i $edge
+                set edge [expr {$edge - [lindex $ColW $i] - $ColGap}]
+            }
+            if {$n == 0} {
+                # No column laid: the subject and a label may run to the full width.
+                set SubjectMax [expr {$cw - 12}]
+                set LabelMax [expr {$cw - 16}]
+                break
+            }
+            # Subject runs up to just before the leftmost metadata column; a
+            # label laying no cell of its own before the first tab stop may run
+            # up to it, capped just short of that.
+            set SubjectMax [expr {$edge - 12}]
+            set LabelMax [expr {[lindex $rights 0] - 16}]
+            if {$SubjectMax >= 80} break
         }
+        set ColLaid [lrange $ids 0 [expr {$n - 1}]]
         set ColRightX $rights
         set ColTabs [list]
         foreach rx $rights { lappend ColTabs $rx right }
-        # Floor the stops to a strictly increasing positive sequence: at the
-        # build-time placeholder width, or a very narrow window at high DPI, the
-        # right-to-left arithmetic can leave the leftmost stops non-positive, and
-        # Tk rejects a tab stop that is not positive or not greater than the one
-        # before it. The real positions recompute on <Configure> once mapped.
-        set ColTabs [::streamtree::sane_tabs $ColTabs]
-        if {$n == 0} {
-            # No metadata columns: the subject and a root label may run to the
-            # full width.
-            set SubjectMax [expr {$cw - 12}]
-            set FolderLabelMax [expr {$cw - 16}]
-        } else {
-            # Subject runs up to just before the leftmost metadata column.
-            set first_rx [lindex $rights 0]
-            set SubjectMax [expr {$first_rx - [lindex $ColW 0] - $ColGap - 12}]
-            # A root label lays no cell of its own before the first tab stop,
-            # so it may run up to it; cap it just short of that.
-            set FolderLabelMax [expr {$first_rx - 16}]
-        }
         if {$SubjectMax < 80} { set SubjectMax 80 }
-        if {$FolderLabelMax < 60} { set FolderLabelMax 60 }
+        if {$LabelMax < 60} { set LabelMax 60 }
         my apply_column_tabs $ColTabs
         if {[winfo exists $Top.body.hdr]} { $Top.body.hdr configure -tabs $ColTabs }
         my draw_column_handles
+    }
+
+    # The columns the strip lays at the current width: the leading run of
+    # effective_column_spec, every column when the widget is wide enough.
+    method laid_columns {} {
+        return [lrange [my effective_column_spec] 0 [expr {[llength $ColLaid] - 1}]]
     }
 
     # The visible resize affordance: a thin vertical rule down the header at each
@@ -676,7 +688,7 @@ oo::class create ::streamtree::StreamTree {
         if {![winfo exists $Top.body.hdr]} return
         set h $Top.body.hdr
         if {![info exists ColHandles]} { set ColHandles [list] }
-        set n [llength $ColW]
+        set n [llength $ColRightX]
         while {[llength $ColHandles] < $n} {
             set w $h.sep[llength $ColHandles]
             frame $w -width 1 -background [my colour muted] \
@@ -753,7 +765,7 @@ oo::class create ::streamtree::StreamTree {
     # left edge is its right edge less its width; dragging it left widens the
     # column (the columns to its left and the subject absorb the change).
     method boundary_col {cx} {
-        set n [llength $ColW]
+        set n [llength $ColRightX]
         for {set i 0} {$i < $n} {incr i} {
             set left [expr {[lindex $ColRightX $i] - [lindex $ColW $i]}]
             if {abs($cx - $left) <= 4} { return $i }
@@ -809,29 +821,33 @@ oo::class create ::streamtree::StreamTree {
     # the leftmost header sorts.
     method subject_sort_id {} { return "" }
 
-    # Map a header click x (widget pixels) to a metadata column and sort by it.
-    # Each column occupies [right_edge - width, right_edge]; a click left of the
+    # The laid column under a header x (widget pixels), as its id, or "" in a
+    # gap or the subject zone. Each column occupies [right_edge - width,
+    # right_edge] with a few px of slack either side.
+    method column_at {x} {
+        set cx [expr {$x - 8}]
+        set i 0
+        foreach col [my laid_columns] {
+            set rx [lindex $ColRightX $i]
+            if {$cx >= $rx - [lindex $ColW $i] - 6 && $cx <= $rx + 4} { return [lindex $col 0] }
+            incr i
+        }
+        return ""
+    }
+
+    # A header click sorts by the column under it; a click left of the
     # leftmost column is the subject zone and sorts by the domain's subject key,
     # when it defines one; a click in the gaps sorts nothing.
     method on_header_click {x} {
-        set cx [expr {$x - 8}]
-        set cols [my effective_column_spec]
-        if {![llength $cols]} {
-            set sid [my subject_sort_id]
-            if {$sid ne ""} { my set_sort $sid }
+        set id [my column_at $x]
+        if {$id ne ""} {
+            foreach col [my laid_columns] {
+                if {[lindex $col 0] eq $id && [lindex $col 4]} { my set_sort $id }
+            }
             return
         }
-        for {set i 0} {$i < [llength $cols]} {incr i} {
-            lassign [lindex $cols $i] id label sample align sortable
-            set rx [lindex $ColRightX $i]
-            set lo [expr {$rx - [lindex $ColW $i] - 6}]
-            if {$cx >= $lo && $cx <= $rx + 4} {
-                if {$sortable} { my set_sort $id }
-                return
-            }
-        }
-        set first_lo [expr {[lindex $ColRightX 0] - [lindex $ColW 0] - 6}]
-        if {$cx < $first_lo} {
+        set cx [expr {$x - 8}]
+        if {![llength $ColRightX] || $cx < [lindex $ColRightX 0] - [lindex $ColW 0] - 6} {
             set sid [my subject_sort_id]
             if {$sid ne ""} { my set_sort $sid }
         }
@@ -871,7 +887,7 @@ oo::class create ::streamtree::StreamTree {
             set act_off 0
             set act_len [string length $line]
         }
-        foreach col [my effective_column_spec] {
+        foreach col [my laid_columns] {
             lassign $col id label
             append line "\t"
             set lbl $label
@@ -892,27 +908,33 @@ oo::class create ::streamtree::StreamTree {
 
     # ---- sort ordering ------------------------------------------------
 
-    # Order a list of domain keys by the active sort. Each value reads a
-    # payload field through the sort_key hook; src maps a key to its payload.
-    # A subclass helper, off the base class's own ordering path.
-    method sort_paths {paths src} {
+    # The active sort, as {key dir}: the column id and asc or desc. What a
+    # sort_siblings body orders by.
+    method sort {} { return [list $SortKey $SortDir] }
+
+    # Order keys by the active sort, each key's value read through the
+    # sort_key hook from its payload; payloads maps a key to its payload, and
+    # a key it lacks sorts as -1. A subclass helper, off the base class's own
+    # ordering path.
+    method sort_by_payload {keys payloads} {
         set keyed [list]
-        foreach p $paths {
+        foreach k $keys {
             set v -1
-            if {[dict exists $src $p]} {
-                set v [my sort_key [dict get $src $p] $SortKey]
+            if {[dict exists $payloads $k]} {
+                set v [my sort_key [dict get $payloads $k] $SortKey]
             }
-            lappend keyed [list $p $v]
+            lappend keyed [list $k $v]
         }
         set dir [expr {$SortDir eq "asc" ? "-increasing" : "-decreasing"}]
         return [lmap e [lsort -real -index 1 $dir $keyed] { lindex $e 0 }]
     }
 
-    # Order keys by a key->value map. mode picks the lsort comparator: -real
-    # for a numeric value, -dictionary for a string label. A subclass helper too.
-    method sort_folders {order valmap {mode -real}} {
+    # Order keys in the active direction by a key->value map. mode picks the
+    # lsort comparator: -real for a numeric value, -dictionary for a string
+    # label. A subclass helper too.
+    method sort_by_value {keys valmap {mode -real}} {
         set dflt [expr {$mode eq "-real" ? 0.0 : ""}]
-        set keyed [lmap f $order { list $f [dict getdef $valmap $f $dflt] }]
+        set keyed [lmap k $keys { list $k [dict getdef $valmap $k $dflt] }]
         set dir [expr {$SortDir eq "asc" ? "-increasing" : "-decreasing"}]
         return [lmap e [lsort $mode -index 1 $dir $keyed] { lindex $e 0 }]
     }
@@ -956,8 +978,12 @@ oo::class create ::streamtree::StreamTree {
     # pinned to the absolute top so the newest content and the heading stay in
     # view; if they have scrolled into the list, pin the character that was at
     # the top so an insert above it scrolls to compensate and their line does not
-    # move.
+    # move. The pair is not reentrant (one mark, one pair of flags), so it counts
+    # its depth: only the outermost bracket saves and restores, and a bracket
+    # opened inside another (a batch inside a batch, a primitive that batches
+    # inside a host's own bracket) is a no-op that leaves the outer's record alone.
     method anchor_save {} {
+        if {[incr AnchorDepth] > 1} return
         lassign [$Text yview] first last
         set AtTop    [expr {$first <= 0.0001}]
         set AtBottom [expr {$last >= 0.999}]
@@ -965,6 +991,8 @@ oo::class create ::streamtree::StreamTree {
         $Text mark gravity AnchorTop left
     }
     method anchor_restore {} {
+        if {[incr AnchorDepth -1] > 0} return
+        set AnchorDepth 0
         if {[my opt autofollow] && [info exists AtBottom] && $AtBottom} {
             $Text yview moveto 1
         } elseif {[info exists AtTop] && $AtTop} {
@@ -1063,11 +1091,14 @@ oo::class create ::streamtree::StreamTree {
     # the subject ranges, the contiguous metadata run (when meta_run is set), and
     # each cell's overlay tags from cell_tag.
 
-    # Trim text to fit px in font, appending an ellipsis when it is cut. A binary
-    # search on the character count keeps it cheap for long previews.
+    # Trim text to fit px in font, appending an ellipsis when it is cut, and
+    # nothing at all when even the ellipsis would not fit: what comes back
+    # never runs past the budget. A binary search on the character count keeps
+    # it cheap for long previews.
     method truncate_px {text px font} {
         if {$px <= 0} { return "" }
         if {[font measure $font $text] <= $px} { return $text }
+        if {[font measure $font "…"] > $px} { return "" }
         set lo 0
         set hi [string length $text]
         while {$lo < $hi} {
@@ -1084,7 +1115,8 @@ oo::class create ::streamtree::StreamTree {
 
     # Build one row's text: the glyphed-bool attribute prefix, the subject from
     # render_subject, then the metadata cells (the consumer's from cell_values and
-    # the glyphless-bool check columns) pinned to the right by the column tab stops.
+    # the glyphless-bool check columns) pinned to the right by the column tab
+    # stops; a cell of a column the width dropped is left out with its stop.
     # Returns {line subject subjtags meta_run meta_off offs}, where offs maps each
     # laid column id to its {off len} range for cell tagging. The attribute prefix
     # sits at the row start, so the subject's own tag ranges shift past it and every
@@ -1104,6 +1136,7 @@ oo::class create ::streamtree::StreamTree {
         set offs [dict create]
         foreach pair [my effective_cell_values $node] {
             lassign $pair col val
+            if {$col ni $ColLaid} continue
             append line "\t"
             set off [string length $line]
             append line $val
@@ -1112,6 +1145,15 @@ oo::class create ::streamtree::StreamTree {
         return [dict create line $line subject $subject \
             subjtags [concat $ptags $subjtags] \
             meta_run $meta_run meta_off $meta_off offs $offs]
+    }
+
+    # Run one row's build, build_line through apply_line, with the node held as
+    # the row build so its fold is taken once for every hook that asks, and
+    # dropped when the build ends, however it ends.
+    method row_build {node script} {
+        set RowBuild $node
+        set RowFold [dict create]
+        try { uplevel 1 $script } finally { set RowBuild "" }
     }
 
     # Tag a freshly-inserted (or rewritten-in-place) row from its build_line
@@ -1153,24 +1195,38 @@ oo::class create ::streamtree::StreamTree {
     # in check_invariant, so the audit gate names whichever primitive breaks the
     # mark contract.
 
-    # Run a script with the widget editable and the view anchored once, restoring
-    # the prior state after. A streaming flush brackets many inserts in one batch
-    # so the reader's scroll position is saved and restored a single time. A
-    # rebuild a move asks for inside the batch waits for the outermost batch's
-    # end, so reparenting several nodes pays one. It runs once the anchors are
-    # restored, since a rebuild keeps the reader's view by its own means, and
-    # whether or not the script failed: the store has moved either way, and
-    # the view follows the store.
-    method batch {script} {
-        set st [$Text cget -state]
+    # The batch bracket: the widget editable and the view anchored once for
+    # every mutation between begin_batch and end_batch, the prior state restored
+    # at the end. A streaming flush brackets many inserts in one batch so the
+    # reader's scroll position is saved and restored a single time; a host whose
+    # edits arrive streamed opens the bracket in one callback and closes it in
+    # another. The pair counts depth, so a bracket inside an open one is a no-op
+    # and the outermost close does the work. A rebuild a move asks for inside
+    # the batch waits for that close, so reparenting several nodes pays one. It
+    # runs once the anchors are restored, since a rebuild keeps the reader's
+    # view by its own means.
+    method begin_batch {} {
+        if {[incr BatchDepth] > 1} return
+        set BatchState [$Text cget -state]
         $Text configure -state normal
         my anchor_save
-        incr BatchDepth
-        set code [catch {uplevel 1 $script} res opts]
-        incr BatchDepth -1
+    }
+    method end_batch {} {
+        if {[incr BatchDepth -1] > 0} return
+        set BatchDepth 0
         my anchor_restore
-        $Text configure -state $st
-        if {$BatchDepth == 0 && $RebuildPending} { my rebuild }
+        $Text configure -state $BatchState
+        if {$RebuildPending} { my rebuild }
+    }
+    method batch_depth {} { return $BatchDepth }
+
+    # The bracket as a script, for a host with all its edits in hand. The
+    # bracket closes whether or not the script failed: the store has moved
+    # either way, and the view follows the store.
+    method batch {script} {
+        my begin_batch
+        set code [catch {uplevel 1 $script} res opts]
+        my end_batch
         return -options $opts $res
     }
 
@@ -1256,13 +1312,15 @@ oo::class create ::streamtree::StreamTree {
             if {$pe ne "" && [$Text compare $pe == $insidx]} { lappend climb $p }
         }
         set tag "${id}_t"
-        set info [my build_line $id]
         set tmp "__rowins"
         $Text mark set $tmp $insidx
         $Text mark gravity $tmp right
         set rstart [$Text index $tmp]
-        $Text insert $tmp "[dict get $info line]\n" [list {*}[my row_tags $kind] $tag]
-        my apply_line $id $rstart $info
+        my row_build $id {
+            set info [my build_line $id]
+            $Text insert $tmp "[dict get $info line]\n" [list {*}[my row_tags $kind] $tag]
+            my apply_line $id $rstart $info
+        }
         set rowend [$Text index $tmp]
         $Text mark unset $tmp
         if {$before ne ""} { $Text mark set [my node_field $before start] $rowend }
@@ -1444,14 +1502,16 @@ oo::class create ::streamtree::StreamTree {
         $Text configure -state normal
         set sm [my node_field $id start]
         set tag [my node_field $id tag]
-        set info [my build_line $id]
         set s0 [$Text index $sm]
-        $Text delete $sm "$sm lineend"
-        $Text mark gravity $sm left
-        $Text insert $s0 [dict get $info line] [list {*}[my row_tags [my node_field $id kind]] $tag]
-        $Text mark gravity $sm [my start_gravity [my node_field $id kind]]
-        $Text mark set $sm $s0
-        my apply_line $id $s0 $info
+        my row_build $id {
+            set info [my build_line $id]
+            $Text delete $sm "$sm lineend"
+            $Text mark gravity $sm left
+            $Text insert $s0 [dict get $info line] [list {*}[my row_tags [my node_field $id kind]] $tag]
+            $Text mark gravity $sm [my start_gravity [my node_field $id kind]]
+            $Text mark set $sm $s0
+            my apply_line $id $s0 $info
+        }
         $Text configure -state $st
         my check_invariant item
     }
@@ -1549,7 +1609,7 @@ oo::class create ::streamtree::StreamTree {
     # the view with the reparenting, and the rebuild draws them in their place.
     # Inside a batch the rebuild waits for the batch's end and runs once for
     # all the moves in it; outside, it runs now.
-    method move {id newparent args} {
+    method move {id newparent} {
         my detach $id
         my detach_child $id
         my node_set $id parent $newparent

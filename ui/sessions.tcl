@@ -92,11 +92,9 @@ oo::class create ::questlog::ui::SessionList {
     variable Roots
     variable NextId
     variable ColTabs
-    variable ColRightX
-    variable ColW
     variable ColGap
     variable SubjectMax
-    variable FolderLabelMax
+    variable LabelMax
     variable LayoutW
     variable RelayoutPending
     variable SortKey
@@ -124,15 +122,8 @@ oo::class create ::questlog::ui::SessionList {
     variable CutReason        ;# the criterion that cut them: subtree|search|since|""
     variable Pinned           ;# dict sid -> 1: sessions the reader pulled in past the search
     variable ViewRebuildTimer ;# after-id of the debounced hidden-aware rebuild, or ""
-    variable InBatch          ;# 1 between begin_batch and end_batch: row methods
-                              ;# leave the bracket (state, anchor, headings,
-                              ;# resort) to the batch instead of paying it per row
-    variable FlushBatch       ;# the coroutine parked inside the base class's batch
-                              ;# while one is open across begin_batch/end_batch
     variable DirtyHeadings    ;# dict folder -> 1: headings whose aggregates moved
                               ;# during the open batch, redrawn once at its close
-    variable HeadingFold      ;# {fid agg}: the shown fold of the heading whose
-                              ;# line is being built, "" outside a build
     variable TurnsView        ;# the toolbar's turns floor as a view filter: a
                               ;# session with nturns below it is hidden, never
                               ;# excluded - it stays stored, priced and counted
@@ -159,8 +150,6 @@ oo::class create ::questlog::ui::SessionList {
     variable OnSubagentCost   ;# cb: child path -> start the cost pass for it
     variable PeekByTag        ;# dict: row tag -> {kind text cursor sub}; hover reveal and hit menu resolve from it at event time
     variable HeaderPeek       ;# the column id the pointer last rested over in the header, or ""
-    variable ColRightX        ;# base class: each metadata column's right edge, header x space
-    variable ColW             ;# base class: each metadata column's laid-out width
 
     # on_widen is optional: without it the cut banner still names what the search
     # left behind and still offers to load it (that is this object's own doing),
@@ -202,9 +191,6 @@ oo::class create ::questlog::ui::SessionList {
         set CutReason ""
         set Pinned [dict create]
         set ViewRebuildTimer ""
-        set InBatch 0
-        set FlushBatch ""
-        set HeadingFold ""
         set DirtyHeadings [dict create]
         set TurnsView 1
         set Query [dict create terms [list] nocase 0]
@@ -264,11 +250,7 @@ oo::class create ::questlog::ui::SessionList {
     # motion inside one would otherwise re-arm it.
     method on_header_motion {x} {
         next $x
-        set hit ""
-        foreach col [my effective_column_spec] rx $ColRightX w $ColW {
-            if {$x - 8 >= $rx - $w - 6 && $x - 8 <= $rx + 4} { set hit [lindex $col 0] }
-        }
-        my header_peek $hit
+        my header_peek [my column_at $x]
     }
     method header_peek {col} {
         if {$col eq $HeaderPeek} return
@@ -1023,36 +1005,20 @@ oo::class create ::questlog::ui::SessionList {
         my draw_arrival $path
     }
 
-    # Bracket a slice of row work so a whole idle flush does one
-    # anchor_save/restore, one redraw per touched folder heading, one rebuild
-    # for every move inside it and one schedule_resort, not one of each per
-    # row. The bracket is the base class's batch, which opens the widget and
-    # anchors the reader's view on the way in and restores both on the way
-    # out, running once the rebuild the moves inside deferred; it is a script
-    # bracket, so a coroutine parked inside it holds it open between the two
-    # calls, and end_batch resumes the coroutine to close it. Without that,
-    # ensure_folder's capture of held siblings and folder_after_leave's step
-    # up each paid a synchronous whole-widget rebuild mid-flush.
-    #
-    # InBatch counts depth, so the bracket nests: a row method that brackets
-    # itself when called singly (freshen_attached, on_scan_row) opens a no-op
-    # inner bracket when an outer one already holds the widget - the
-    # outermost close is the one that settles headings, anchor, state and
-    # resort. A non-counting flag broke this: render_session_matches can
-    # re-enter on_scan_row through the scan-path seam, and an inner close that
-    # disabled the widget silently dropped every insert after it.
-    method begin_batch {} {
-        if {[incr InBatch] > 1} return
-        set FlushBatch [my coro flush_batch [self] batch { yield }]
-    }
+    # The base class's batch bracket, which a whole idle flush holds open so
+    # it pays one anchor_save/restore and one rebuild for every move inside
+    # it, with the host's own close work: the headings whose sums moved are
+    # redrawn once, inside the bracket, and one schedule_resort follows. A row
+    # method that brackets itself when called singly (freshen_attached,
+    # on_scan_row) opens a no-op inner bracket when an outer one holds the
+    # widget, so only the outermost close settles anything.
     method end_batch {} {
-        if {[incr InBatch -1] > 0} return
-        dict for {f _} $DirtyHeadings { my redraw_folder_heading $f }
-        set DirtyHeadings [dict create]
-        $FlushBatch
-        set FlushBatch ""
-        $Text configure -state disabled
-        my schedule_resort
+        if {[my batch_depth] == 1} {
+            dict for {f _} $DirtyHeadings { my redraw_folder_heading $f }
+            set DirtyHeadings [dict create]
+        }
+        next
+        if {![my batch_depth]} { my schedule_resort }
     }
 
     # A folder heading whose sums moved, and every heading above it, since a
@@ -1062,7 +1028,7 @@ oo::class create ::questlog::ui::SessionList {
     method mark_heading_dirty {folder} {
         set fid [my fid $folder]
         foreach id [list $fid {*}[my ancestors $fid]] {
-            if {$InBatch} {
+            if {[my batch_depth]} {
                 dict set DirtyHeadings [my node_field $id key] 1
             } else {
                 my redraw_folder_heading [my node_field $id key]
@@ -1996,7 +1962,7 @@ oo::class create ::questlog::ui::SessionList {
     method cell_values {node} {
         set kind [my node_field $node kind]
         if {$kind eq "folder"} {
-            set agg [my folder_sums $node]
+            set agg [my node_aggregate $node 1]
             set cells [my meta_cells [dict filter $agg script {k v} {expr {$v > 0}}]]
             return [lmap col {date size cost turns duration ah} {
                 list $col [dict get $cells $col]
@@ -2023,7 +1989,7 @@ oo::class create ::questlog::ui::SessionList {
             if {$col ni {size cost duration ah}} { return {} }
             set ctag meta
             if {$col eq "cost"} {
-                set fc [dict get [my folder_sums $node] cost]
+                set fc [dict get [my node_aggregate $node 1] cost]
                 if {$fc >= 1.0} { set ctag cost-outlier } elseif {$fc >= 0.10} { set ctag cost-mid }
             }
             return [list $ctag foldagg]
@@ -2337,37 +2303,6 @@ oo::class create ::questlog::ui::SessionList {
 
     # ---- the fold behind a heading --------------------------------------
     #
-    # A heading's subject, its cells and their tags all read what the folder
-    # shows (the fold over its shown rows), and the base class asks for them
-    # one hook at a time while it builds the line, so a heading redraw folded
-    # its subtree three times over, the root's over the whole corpus on every
-    # flush. The fold is taken once for the one line build the two builders
-    # bracket and dropped with it: nothing is kept across builds, so a move,
-    # a forget or a freshen cannot leave a heading behind. A hook asked
-    # outside a build (sort_siblings, a test) folds for itself.
-    method render_row {id {before ""}} {
-        set outer $HeadingFold
-        set HeadingFold [my heading_fold $id]
-        try { next $id $before } finally { set HeadingFold $outer }
-    }
-    method item {id} {
-        if {![my node_field $id rendered]} return
-        set outer $HeadingFold
-        set HeadingFold [my heading_fold $id]
-        try { next $id } finally { set HeadingFold $outer }
-    }
-    method heading_fold {id} {
-        if {[my node_field $id kind] ne "folder"} { return "" }
-        return [list $id [my node_aggregate $id 1]]
-    }
-    # What a folder shows, summed: the build's fold, or a fresh one.
-    method folder_sums {node} {
-        if {$HeadingFold ne "" && [lindex $HeadingFold 0] eq $node} {
-            return [lindex $HeadingFold 1]
-        }
-        return [my node_aggregate $node 1]
-    }
-
     # The folder heading subject: the marker, the (truncated) project label, the
     # gone glyph when its directory no longer exists, and a bare "(N)" count of
     # the sessions beneath it, nested folders included - "(N of M)" when a list
@@ -2380,7 +2315,7 @@ oo::class create ::questlog::ui::SessionList {
     # toggles expand/collapse, the label selects the folder.
     method folder_subject {node} {
         set marker [expr {[my node_field $node expanded] ? "▾" : "▸"}]
-        set n [dict get [my folder_sums $node] count]
+        set n [dict get [my node_aggregate $node 1] count]
         set total [expr {[my any_view_toggle] ? [dict get [my node_aggregate $node] count] : $n}]
         set count_str [expr {[my folder_gone $node] ? " $::questlog::ui::GLYPH_GONE" : ""}]
         if {$n > 0} {
@@ -2390,17 +2325,14 @@ oo::class create ::questlog::ui::SessionList {
         # never runs into the right-pinned aggregates. Everything before the
         # first tab stop is the marker, the label, the count and the indent, and
         # a pixel past that stop puts the whole strip of aggregates on the next
-        # one, a column right of the rows'. The budget is that stop rather than
-        # FolderLabelMax, which floors at 60px and a narrow pane can carry past
-        # it. With nothing left for a label the count keeps the strip in place
-        # on its own, so the joining space goes with the label.
+        # one, a column right of the rows'. With nothing left for a label the
+        # count keeps the strip in place on its own, so the joining space goes
+        # with the label.
         set fixed [expr {[font measure QLList "$marker "] \
                          + [font measure QLList $count_str] \
                          + [my indent_px $node]}]
-        set stop [expr {[llength $ColTabs] ? [lindex $ColTabs 0] - 16 \
-                                           : $FolderLabelMax}]
         set full [my folder_label $node]
-        set label [my truncate_px $full [expr {$stop - $fixed}] QLList]
+        set label [my truncate_px $full [expr {$LabelMax - $fixed}] QLList]
         set gap [expr {$label eq "" ? "" : " "}]
         set tags [list [list foldchevron 0 1]]
         # A project path is long and cut from the front of the aggregates, so a
@@ -2751,7 +2683,7 @@ oo::class create ::questlog::ui::SessionList {
         if {[my sflag $path rendered]} { my redraw_header $path }
         # The worker result can change cost-, turns-, duration-, A/H- or
         # context-sorted order.
-        if {$SortKey in {cost turns duration ah context}} { my schedule_resort }
+        if {[lindex [my sort] 0] in {cost turns duration ah context}} { my schedule_resort }
     }
 
     # The cost arrival's payload writes, shared by the attached path (which
@@ -2806,7 +2738,7 @@ oo::class create ::questlog::ui::SessionList {
             $Text configure -state disabled
             # The worker result can change cost-, turns-, duration-, A/H- or
             # context-sorted order.
-            if {$SortKey in {cost turns duration ah context}} { my schedule_resort }
+            if {[lindex [my sort] 0] in {cost turns duration ah context}} { my schedule_resort }
         }
     }
 
@@ -3660,32 +3592,33 @@ oo::class create ::questlog::ui::SessionList {
     # by the active sort: a summed column by the heading's sum, date by the
     # newest session anywhere beneath (so the roots read by recency, as the
     # sessions of one folder do), path by label, else arrival order; sessions
-    # by sort_paths; subagents keep arrival order.
+    # by their payloads; subagents keep arrival order.
     method sort_siblings {ids} {
         if {[llength $ids] == 0} { return $ids }
         set bykey [dict create]
         foreach id $ids { dict set bykey [my node_field $id key] $id }
         set order [dict keys $bykey]
+        set key [lindex [my sort] 0]
         switch [my node_field [lindex $ids 0] kind] {
             folder {
                 set summed {date mtime size size cost cost duration duration_secs}
-                if {[dict exists $summed $SortKey]} {
+                if {[dict exists $summed $key]} {
                     set valmap [dict create]
                     foreach id $ids {
                         dict set valmap [my node_field $id key] \
-                            [dict get [my node_aggregate $id 1] [dict get $summed $SortKey]]
+                            [dict get [my node_aggregate $id 1] [dict get $summed $key]]
                     }
-                    set order [my sort_folders $order $valmap -real]
-                } elseif {$SortKey eq "path"} {
+                    set order [my sort_by_value $order $valmap -real]
+                } elseif {$key eq "path"} {
                     set valmap [dict create]
                     foreach id $ids { dict set valmap [my node_field $id key] [my folder_label $id] }
-                    set order [my sort_folders $order $valmap -dictionary]
+                    set order [my sort_by_value $order $valmap -dictionary]
                 }
             }
             session {
-                set src [dict create]
-                foreach id $ids { dict set src [my node_field $id key] [my node_payload $id] }
-                set order [my sort_paths $order $src]
+                set payloads [dict create]
+                foreach id $ids { dict set payloads [my node_field $id key] [my node_payload $id] }
+                set order [my sort_by_payload $order $payloads]
             }
         }
         return [lmap k $order { dict get $bykey $k }]

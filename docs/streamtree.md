@@ -19,7 +19,7 @@ $t insert "" row a [dict create label "first row"]
 
 `ttk::treeview` cannot draw multi-line rows, embed per-row widgets (match snippets, badge pills), anchor the viewport against a streaming insert, or roll child aggregates up into a parent heading. A canvas rewrite that can is a project of its own.
 
-streamtree renders a tree of abstract nodes into a single `text` widget: nodes nested to any depth, each rendered as one row, with a right-pinned metadata strip whose sortable, resizable columns line up across every row. It reuses treeview's *vocabulary* so the API reads as familiar. Each node carries the position marks and tag that locate it in the widget plus an opaque domain payload; the subclass supplies content and ordering through hooks (Template Method), and the base class never looks inside a payload.
+streamtree renders a tree of abstract nodes into a single `text` widget: nodes nested to any depth, each rendered as one row, with a right-pinned metadata strip whose sortable, resizable columns line up across every row. A widget too narrow for its strip drops columns from the right until the rest leave the subject its floor (80 px), so the leading columns, the ones a host names first, are the ones that survive a narrow pane; they return as the widget widens. It reuses treeview's *vocabulary* so the API reads as familiar. Each node carries the position marks and tag that locate it in the widget plus an opaque domain payload; the subclass supplies content and ordering through hooks (Template Method), and the base class never looks inside a payload.
 
 `setup` runs the whole construction ritual: it seeds the base class's state, builds the header and list into the frame, and lays out the columns. A host that wants to assemble things differently can do what `setup` does, step by step. Content beyond a flat labelled list comes from subclassing and overriding hooks (columns, rich subjects, sorts, per-kind row styles).
 
@@ -33,8 +33,9 @@ streamtree renders a tree of abstract nodes into a single `text` widget: nodes n
 | `item id` | `item id -values ...` | rewrites the node's own row in place |
 | `expand id` / `collapse id` | `item id -open true/false` | draws / removes the body; `expand` also draws the node's own row when it has none and is due |
 | `hide id` / `unhide id` | `detach` + `move` | a reversible per-node filter (treeview has no first-class hide) |
-| `move id newparent` | `move id newparent end` | reparents (`""` makes it a root), then rebuilds; inside `batch` the rebuild waits for the batch's end, so several moves pay one |
+| `move id newparent` | `move id newparent end` | reparents (`""` makes it a root) last among its new siblings, then rebuilds; inside a batch the rebuild waits for the batch's end, so several moves pay one. There is no index argument: where the node lands is the sort's to say at the rebuild |
 | `batch script` | (none) | runs the script with the widget editable and the reader's view anchored once; a `move` inside it defers its rebuild to the batch's end |
+| `begin_batch` / `end_batch` | (none) | the same bracket as two calls, for a host whose edits arrive streamed: open it in one callback, close it in another. It counts depth, so a bracket inside an open one (a `batch` included) is a no-op and the outermost `end_batch` restores the view and the widget state and runs the deferred rebuild; `batch_depth` says how many are open |
 | `column id -width N -minwidth M` | `column id -width N -minwidth M` | per-column width override and clamp |
 | `rebuild` | (none) | re-render the whole tree from the durable store under the active sort |
 | `reset` | `delete [children {}]` | empty the whole widget |
@@ -66,7 +67,7 @@ Match snippets and badge windows are loose row content, not nodes. They go throu
 
 The widget's defining behaviour: content arriving while the user reads never moves what they are reading.
 
-- A streamed mutation is bracketed with `anchor_save` / `anchor_restore`. A reader pinned at the top stays at the top; a reader inside the list keeps their line even when rows land above it.
+- A streamed mutation is bracketed with `anchor_save` / `anchor_restore`. A reader pinned at the top stays at the top; a reader inside the list keeps their line even when rows land above it. The pair counts its depth: a bracket opened while one is open, a primitive's own `batch` inside a host's bracket say, is a no-op, and only the outermost pair saves and restores.
 - With `-autofollow 1` and the reader at the tail, the view latches to the tail and follows streamed appends (the `tail -f` / chat contract); the latch releases the moment they scroll away.
 - `follow` jumps to the tail and re-latches.
 - `<<AtBottom>>` and `<<LeftBottom>>` fire on the host frame when the view reaches or leaves the last line, so a host can show a "jump to latest" affordance the way chat clients do.
@@ -75,7 +76,7 @@ The widget's defining behaviour: content arriving while the user reads never mov
 
 Every hook has a working default: the base class renders each node's payload `label` (falling back to the node key) as a plain tree with no metadata columns.
 
-Content / layout: `subject_label` (header over the subject column), `column_spec`, `render_subject`, `cell_values`, `cell_tag`, `sort_key`, `subject_sort_id` (the column id a click on the subject header sorts by; the default, `""`, leaves the subject unsortable), `default_sort_dir id` (the direction a freshly adopted sort starts in, `asc` or `desc`; the default is `desc` for every column, and a second click on the active column flips it), `apply_column_tabs` (default sets the tab stops widget-wide; override to configure row tags that carry their own `-tabs`), `relayout_content`.
+Content / layout: `subject_label` (header over the subject column), `column_spec`, `render_subject`, `cell_values`, `cell_tag`, `sort_key`, `subject_sort_id` (the column id a click on the subject header sorts by; the default, `""`, leaves the subject unsortable), `default_sort_dir id` (the direction a freshly adopted sort starts in, `asc` or `desc`; the default is `desc` for every column, and a second click on the active column flips it), `apply_column_tabs tabs` (handed the stops of the columns the current width lays, one per laid column; the default sets them widget-wide, a host whose row tags carry their own `-tabs` configures those tags instead), `relayout_content`. A `cell_values` pair for a column the width has dropped is left out of the row with its stop, so a host lays every column it declares and lets the width decide.
 
 Row lifecycle (per node kind): `start_gravity`, `row_tags`, `on_node_created` (register domain indices before the row renders), `on_row_rendered` (wire bindings, nested content, selection), `on_before_delete` (drop domain indices), `populate` (called at the top of `expand`; a lazy host enumerates and attaches the node's children here, a materialized tree keeps the no-op default).
 
@@ -85,9 +86,9 @@ Aggregation: `aggregate_seed` (the value a subtree fold starts from) and `aggreg
 
 ## THE SUBCLASS SURFACE
 
-A hook body works with its nodes through the store accessors, part of the subclassing contract: `node_exists id`, `node_get id` (the whole node dict), `node_field id field` / `node_set id field value` (one generic field), `node_payload id` (the opaque host dict) and `node_pget id key ?default?` / `node_pset id key value` (one payload key), `roots` (the ordered root ids), `ancestors id` (nearest first, up to the root) and `descendants id` (parents before children, siblings in store order, to any depth). Beside them sit the helpers a subclass reaches for while rendering and sorting: `colour role` (a `-colours` entry), `truncate_px text px font` (ellipsize to a pixel width), `all_rendered_nodes` (ids with a row in the view, document order), `render_row id ?before?` (draw one node's own row at its place, or before a drawn sibling's, the call a host's per-kind draw method makes), `set_sort id` (adopt a column as the active sort), `schedule_resort` (debounced re-sort after streamed edits, `-resortdelay`), and two sort helpers off the base class's own ordering path, for a host ordering its own key lists under the active sort: `sort_paths keys src` (each key's value read through `sort_key` from `src`, a key-to-payload dict; a key absent from it sorts as -1) and `sort_folders keys valmap ?mode?` (each key's value read from `valmap`, a key-to-value dict, compared `-real` by default or `-dictionary`; an absent key sorts as 0.0 or the empty string). The demos use exactly this surface and nothing deeper. A subclass that wants more than these and the hooks has found a gap in this surface, and the gap closes by naming the method here, where it joins the contract: what is not named is the base class's own and may change with any release.
+A hook body works with its nodes through the store accessors, part of the subclassing contract: `node_exists id`, `node_get id` (the whole node dict), `node_field id field` / `node_set id field value` (one generic field), `node_payload id` (the opaque host dict) and `node_pget id key ?default?` / `node_pset id key value` (one payload key), `roots` (the ordered root ids), `ancestors id` (nearest first, up to the root) and `descendants id` (parents before children, siblings in store order, to any depth). Beside them sit the helpers a subclass reaches for while rendering and sorting: `colour role` (a `-colours` entry), `truncate_px text px font` (ellipsize to a pixel width: the text when it fits, else as much as fits with an ellipsis, else the empty string when even the ellipsis would overrun, so what comes back never exceeds `px`), `laid_columns` (the columns the current width lays, the leading run of the declared strip) and `column_at x` (the laid column under a header x, or `""` in a gap or the subject zone), `all_rendered_nodes` (ids with a row in the view, document order), `render_row id ?before?` (draw one node's own row at its place, or before a drawn sibling's, the call a host's per-kind draw method makes), `sort` (the active sort as `{key dir}`, what a `sort_siblings` body orders by), `set_sort id` (adopt a column as the active sort), `schedule_resort` (debounced re-sort after streamed edits, `-resortdelay`), `batch_depth` (how many batch brackets are open, for a host deferring per-row work to the outermost close), and two sort helpers off the base class's own ordering path, for a host ordering its own key lists under the active sort: `sort_by_payload keys payloads` (each key's value read through `sort_key` from `payloads`, a key-to-payload dict; a key absent from it sorts as -1) and `sort_by_value keys valmap ?mode?` (each key's value read from `valmap`, a key-to-value dict, compared `-real` by default or `-dictionary`; an absent key sorts as 0.0 or the empty string). The demos use exactly this surface and nothing deeper. A subclass that wants more than these and the hooks has found a gap in this surface, and the gap closes by naming the method here, where it joins the contract: what is not named is the base class's own and may change with any release.
 
-`node_aggregate id ?shown?` is what a node adds up to: `aggregate_add` folded from `aggregate_seed` over the node and everything under it, parents before children. The host supplies the two hooks (a count of the leaves, a size summed from the payloads beneath a container) and the base class the walk, and only the walk: nothing is cached, so the answer after a move, a delete, a hide or a rewritten payload is the tree as it stands. With `shown` true a hidden node is left out with its whole subtree: the hidden flag is the one filter the store carries, so one fold answers both everything under a heading and what survives the hides. Open or shut and `render_skip` are draw-time decisions the fold does not consult: it reads the store, not the buffer, so a heading's figures hold while it is shut. At 0.7 µs a node with the default hooks (see PERFORMANCE), a heading's fold costs less than drawing the heading, which is why there is no cache to fall behind.
+`node_aggregate id ?shown?` is what a node adds up to: `aggregate_add` folded from `aggregate_seed` over the node and everything under it, parents before children. The host supplies the two hooks (a count of the leaves, a size summed from the payloads beneath a container) and the base class the walk, and only the walk: nothing is kept past one row build, so the answer after a move, a delete, a hide or a rewritten payload is the tree as it stands. Within one row build (`render_subject`, `cell_values` and `cell_tag` for the node whose row is being laid) the node's own fold is taken on the first ask and handed to every later one, so a heading whose three hooks each read it pays one walk per draw rather than three; the transient is dropped when the build ends, and a hook asked outside a build folds for itself. With `shown` true a hidden node is left out with its whole subtree: the hidden flag is the one filter the store carries, so one fold answers both everything under a heading and what survives the hides. Open or shut and `render_skip` are draw-time decisions the fold does not consult: it reads the store, not the buffer, so a heading's figures hold while it is shut. At under a microsecond a node with the default hooks and a few with a host's (see PERFORMANCE), a heading's fold costs less than drawing the heading, which is why there is no cache to fall behind.
 
 ## OPTIONS
 
@@ -111,21 +112,25 @@ The check is not free: every audited primitive walks the whole store, the drawn 
 
 ## PERFORMANCE
 
-Measured September 2026 on the 0.7.0 release (medians of 3, min-max in parentheses) on an Intel Core Ultra 7 258V under Xvfb software rendering, Tcl/Tk 9.0.3, by `bench-streamtree.tcl`, which sits beside the module's source in its home repository and does not travel with a vendored copy. The streaming row is the median of three whole-bench runs pinned to the machine's performance cores; unpinned, a run that lands on an efficiency core carries a p95 more than twice as large, which measures the core it drew rather than the widget. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings); a subclass with metadata columns and wired rows pays more per row.
+Measured September 2026 on the 0.8.0 release (medians of 3, min-max in parentheses) on an Intel Core Ultra 7 258V under Xvfb software rendering, Tcl/Tk 9.0.3, by `bench-streamtree.tcl`, which sits beside the module's source in its home repository and does not travel with a vendored copy. The streaming row is the median of three whole-bench runs pinned to the machine's performance cores; unpinned, a run that lands on an efficiency core carries a p95 more than twice as large, which measures the core it drew rather than the widget. Compare rows within this table, not against the 0.7.0 table: on the day of this measurement the same machine ran the 0.7.0 release's flat 10k load in 472 ms against its published 393, and a side-by-side of the two releases put 0.8.0's row build 2-4% dearer (the once-per-build fold transient), not the 40% the two tables show apart. The numbers are for the bare base class (one text string per row, no columns, no per-row bindings) except the two real-hooks rows; a subclass with metadata columns and wired rows pays more per row.
 
 | scenario | N | median (min-max) | per row | notes |
 |---|---|---|---|---|
-| bulk load, flat | 10,000 | 393 ms (377-442) | 39.3 µs | single flush for the whole batch |
-| bulk load, flat | 50,000 | 3,717 ms (3,630-3,923) | 74.3 µs | single flush for the whole batch |
-| bulk load, treed | 10,000 | 474 ms (455-485) | 47.4 µs | 100 expanded folders |
-| bulk load, treed | 50,000 | 4,182 ms (4,136-4,383) | 83.6 µs | 100 expanded folders |
-| streaming | 10k + 1,000 | 2,289 inserts/s | p95 738 µs | idle flush per insert; reader's line held |
-| full rebuild | 10,000 | 807 ms (780-887) | 80.7 µs | the debounced resort's cost, and what a batch of moves pays once |
+| bulk load, flat | 10,000 | 562 ms (551-621) | 56.2 µs | single flush for the whole batch |
+| bulk load, flat | 50,000 | 4,705 ms (4,685-4,805) | 94.1 µs | single flush for the whole batch |
+| bulk load, treed | 10,000 | 597 ms (589-622) | 59.7 µs | 100 expanded folders |
+| bulk load, treed | 50,000 | 5,586 ms (5,259-5,729) | 111.7 µs | 100 expanded folders |
+| streaming | 10k + 1,000 | 1,691 inserts/s | p95 982 µs | idle flush per insert; reader's line held |
+| full rebuild | 10,000 | 1,002 ms (985-1,028) | 100.2 µs | the debounced resort's cost, and what a batch of moves pays once |
 | memory, marginal row | 10k→50k | | 4.36 kB/row | includes the retained payload dict, per-row tag, two marks |
-| subtree fold | 3,160 | 2 ms (2-3) | 0.7 µs | 160 folders three deep under 10 roots, default counting hooks, each root folded once |
-| every heading folded | 160 folds | 5 ms (5-5) | | the same tree, each folder folded over its own subtree, what a redraw of every heading asks |
+| subtree fold | 3,160 | 3 ms (3-3) | 1.1 µs | 160 folders three deep under 10 roots, default counting hooks, each root folded once |
+| every heading folded | 160 folds | 7 ms (7-7) | | the same tree, each folder folded over its own subtree, what a redraw of every heading asks |
+| subtree fold, real hooks | 3,160 | 12 ms (11-13) | 3.9 µs | the same tree, the fold summing three payload fields into a dict, each root folded once |
+| every heading redrawn, real hooks | 160 headings | 274 ms (274-279) | 1.7 ms | `item` on each drawn heading, its subject, cell and cell tag each reading the shown fold: 9,430 `aggregate_add` calls, one walk per heading. The 0.7.0 release, three walks per heading, made 28,290 calls in 328 ms on the same day |
 
-For calibration, ttk::treeview on the same machine bulk-loads 10k display-text-only rows in 18 ms (1.8 µs/row; 1.2 µs/row at 50k, a native C widget's floor) and holds 0.53 kB/row. It streams 2,983 inserts/s into a 10k flat list, but its scroll shifts on every insert; that repaint is baked into its number, where streamtree's number pays for the anchor work that prevents the shift. The workloads differ in what a row retains: streamtree keeps the payload dict, which doubles as the host's data model.
+The real-hooks rows are what a consumer feels: a heading pass is dominated by the text widget's own delete, insert and tag work per line, and the fold is the part a host's hooks scale. A host whose root heading folds its whole corpus on every flush pays that fold once per redraw now, where 0.7.0 paid it three times.
+
+For calibration, ttk::treeview on the same machine bulk-loads 10k display-text-only rows in 18 ms (1.8 µs/row; 1.2 µs/row at 50k, a native C widget's floor) and holds 0.53 kB/row, measured with the 0.7.0 table. It streams 2,983 inserts/s into a 10k flat list, but its scroll shifts on every insert; that repaint is baked into its number, where streamtree's number pays for the anchor work that prevents the shift. The workloads differ in what a row retains: streamtree keeps the payload dict, which doubles as the host's data model.
 
 The base class renders every visible row into the text widget (no virtualization); collapsed subtrees stay unrendered, which is the intended posture for large trees. Practical ceiling: tens of thousands of rendered rows load in seconds and stream comfortably; memory is the binding constraint at roughly 4.4 kB per rendered row.
 
@@ -163,6 +168,36 @@ Newest release first, one entry per release, each saying what a host gains and
 what an existing subclass has to answer differently when it takes that release.
 The record starts at 0.4.0; anything earlier is in the commit log at the
 module's home repository alone.
+
+**0.8.0.** The release the 0.7.0 review deferred to: nine changes to the
+surface a subclass writes against, and one to the bracket every mutation
+runs under, made in place because the module has one consumer and no
+alias would serve anyone. A subclass answers for: `sort_paths` and
+`sort_folders` are `sort_by_payload` and `sort_by_value`, named for what they
+order, with the same arguments; `FolderLabelMax` is `LabelMax`, the budget
+before the first tab stop for a label laying no cell of its own; `move` takes
+no third argument (the trailing index it accepted was dropped unread, and
+where a node lands is the sort's to say); `truncate_px` returns the empty
+string when even the ellipsis would overrun the budget, where it returned the
+ellipsis alone, so a host measures nothing before calling it; and a strip too
+wide for the widget drops columns from the right until the rest leave the
+subject its floor, where it laid every stop one pixel past the last at the
+left edge, so a host's `apply_column_tabs` may be handed fewer stops than it
+declared columns and a `cell_values` pair for a dropped column is left out of
+the row. A host gains: `sort`, the active sort as `{key dir}`, so a
+`sort_siblings` body reads no base-class variable; `laid_columns` and
+`column_at x`, the strip as the width lays it; `begin_batch` and `end_batch`,
+the batch bracket as two calls for a host whose edits arrive streamed, with
+`batch_depth` beside them and `batch` rewritten over the pair; and one fold per
+row build, `node_aggregate` for the node whose row is being laid answering
+from a transient the build holds and drops, so a heading whose subject, cells
+and cell tags each read its fold pays one walk rather than three (the
+real-hooks rows in PERFORMANCE). The anchor pair counts its depth, so a bracket
+opened inside an open one, a `batch` inside a `batch` or a primitive's own
+inside a host's `anchor_save`, is a no-op that leaves the outer's record
+standing; an unguarded inner restore used to unset the shared mark and the
+outer's restore failed in silence. `bench-streamtree.tcl` times a heading pass
+with real hooks, so the PERFORMANCE table carries the number a consumer feels.
 
 **0.7.0.** `arrival_in_order key dir` is now the only answer to whether a node
 streamed in this moment, last among its siblings, already sits where the active
