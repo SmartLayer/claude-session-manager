@@ -1352,9 +1352,10 @@ proc ::questlog::ui::app::quit {} {
 
 # The toolbar's ⋯ menu carries the human-gap rule (lib/cost.tcl human_gap) as
 # two cascades of presets: how long a pause before a prompt still counts in
-# full, and what a longer one is worth. Presets, as the time row offers presets
-# where --since takes any duration; a value --human-gap set outside them shows
-# as no entry ticked. The rule lives in config, where the cost pass reads it.
+# full, and what a longer one is worth. The menu offers presets only, as the
+# time row does although --since takes any duration; a --human-gap value set
+# outside them shows as no entry ticked. The rule lives in config, where the
+# cost pass reads it.
 proc ::questlog::ui::app::human_gap_menu {m} {
     variable GapThreshold [::questlog::config::get cost_human_gap_threshold_min]
     variable GapCredit    [::questlog::config::get cost_human_gap_credit_min]

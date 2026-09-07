@@ -16,7 +16,7 @@
 #   ~/proj/anvil            an unrelated root
 #   ~/proj/quench           a session outside the since bound, so no row
 #   ~/proj/cinder           the same, its directory gone: the walk-only
-#                           resolver cannot place it, so the roster leaves it out
+#                           resolver (folder_cwd) cannot place it, so the roster leaves it out
 
 package require Tcl 9
 package require Tk
