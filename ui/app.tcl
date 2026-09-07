@@ -167,6 +167,7 @@ proc ::questlog::ui::app::start {root {seed {}}} {
     ttk::frame $list_frame
     set Toolbar [::questlog::ui::Toolbar new $list_frame.tb [::questlog::path::launch_cwd]]
     pack $list_frame.tb -side top -fill x
+    human_gap_menu [$Toolbar more_menu]
     set SessionList [::questlog::ui::SessionList new $list_frame.s \
         [namespace code folder_cwd] \
         [namespace code on_open] \
@@ -1345,6 +1346,52 @@ proc ::questlog::ui::app::quit {} {
     if {[info exists Search] && $Search ne ""} { catch {$Search destroy} }
     if {[info exists Scan]   && $Scan ne ""}   { catch {$Scan destroy} }
     exit 0
+}
+
+# ---- the human-gap rule ------------------------------------------------
+
+# The toolbar's ⋯ menu carries the human-gap rule (lib/cost.tcl human_gap) as
+# two cascades of presets: how long a pause before a prompt still counts in
+# full, and what a longer one is worth. Presets, as the time row offers presets
+# where --since takes any duration; a value --human-gap set outside them shows
+# as no entry ticked. The rule lives in config, where the cost pass reads it.
+proc ::questlog::ui::app::human_gap_menu {m} {
+    variable GapThreshold [::questlog::config::get cost_human_gap_threshold_min]
+    variable GapCredit    [::questlog::config::get cost_human_gap_credit_min]
+    foreach {key label var presets} [list \
+            threshold "A pause counts in full up to" GapThreshold {5 10 15 20 30 45 60 90 120} \
+            credit    "A longer pause counts as"     GapCredit    {0 1 2 5}] {
+        menu $m.$key -tearoff 0
+        $m add cascade -label $label -menu $m.$key
+        foreach n $presets {
+            $m.$key add radiobutton -label "$n min" -value $n \
+                -variable [namespace which -variable $var] \
+                -command [namespace code set_human_gap]
+        }
+    }
+}
+
+# A moved rule re-prices every row: human time is derived from the transcript's
+# stamps at pricing and the store holds only the result. The in-flight pass is
+# abandoned first, so a reply priced under the old rule cannot land after one
+# priced under the new.
+proc ::questlog::ui::app::set_human_gap {} {
+    variable GapThreshold
+    variable GapCredit
+    variable SessionList
+    variable VisibleCost
+    variable DeferredCost
+    dict set ::questlog::config::Config cost_human_gap_threshold_min $GapThreshold
+    dict set ::questlog::config::Config cost_human_gap_credit_min $GapCredit
+    cancel_cost
+    foreach path [$SessionList all_session_paths] {
+        if {[$SessionList sflag $path hidden]} {
+            lappend DeferredCost $path
+        } else {
+            lappend VisibleCost $path
+        }
+    }
+    feed_cost
 }
 
 # ---- background cost queue ---------------------------------------------

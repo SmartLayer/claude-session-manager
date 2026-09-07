@@ -74,5 +74,10 @@ $TB set_search "needle"
 $TB publish_now
 check "the search text reaches the snapshot" needle [dict get $::Published search]
 
+# The ⋯ at the search row's right end is the app's to fill: the toolbar hands
+# over an empty menu and publishes nothing for it.
+check "the ⋯ menu exists, empty, for the app" {1 1} \
+    [list [winfo exists [$TB more_menu]] [expr {[[$TB more_menu] index end] in {none {}}}]]
+
 puts [expr {$fails ? "FAILED ($fails)" : "PASS"}]
 exit $fails

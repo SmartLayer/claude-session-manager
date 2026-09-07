@@ -158,6 +158,9 @@ oo::class create ::questlog::ui::SessionList {
     variable OnSubagents      ;# cb: parent path -> list of child row dicts
     variable OnSubagentCost   ;# cb: child path -> start the cost pass for it
     variable PeekByTag        ;# dict: row tag -> {kind text cursor sub}; hover reveal and hit menu resolve from it at event time
+    variable HeaderPeek       ;# the column id the pointer last rested over in the header, or ""
+    variable ColRightX        ;# base class: each metadata column's right edge, header x space
+    variable ColW             ;# base class: each metadata column's laid-out width
 
     # on_widen is optional: without it the cut banner still names what the search
     # left behind and still offers to load it (that is this object's own doing),
@@ -185,6 +188,7 @@ oo::class create ::questlog::ui::SessionList {
         set OnFolderBound $on_folder_bound
         set OnFilterChange $on_filter_change
         set PeekByTag [dict create]
+        set HeaderPeek ""
         set StatusVar "Idle"
         set StatusBase ""
         set Busy 0
@@ -249,6 +253,29 @@ oo::class create ::questlog::ui::SessionList {
             -attrfiltercb [list [self] on_filter_change]
         my reset_nodes
         my build
+        bind $Top.body.hdr <Leave> [list [self] header_peek ""]
+    }
+
+    # Hovering the A/H heading reveals what the ratio is and the human-gap rule
+    # behind its denominator, values in force included, so the reader meets the
+    # rule where they meet the figure. The base class's handler sets the cursor;
+    # this one finds the column under the pointer (the zones on_header_click
+    # reads) and moves the reveal only on crossing a zone edge, since every
+    # motion inside one would otherwise re-arm it.
+    method on_header_motion {x} {
+        next $x
+        set hit ""
+        foreach col [my effective_column_spec] rx $ColRightX w $ColW {
+            if {$x - 8 >= $rx - $w - 6 && $x - 8 <= $rx + 4} { set hit [lindex $col 0] }
+        }
+        my header_peek $hit
+    }
+    method header_peek {col} {
+        if {$col eq $HeaderPeek} return
+        set HeaderPeek $col
+        if {$col ne "ah"} { ::questlog::ui::reveal::hide; return }
+        ::questlog::ui::reveal::show "Machine time over human time. Human time:\
+            [::questlog::cost::human_gap_rule]; the ⋯ menu sets both." A/H
     }
 
     # The session-domain indices are reverse-lookups into the base class's node

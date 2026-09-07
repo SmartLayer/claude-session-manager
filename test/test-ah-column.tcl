@@ -98,6 +98,21 @@ foreach col [::questlog::ui::session_columns] {
 }
 check "the header cell reads A/H" $header "A/H"
 
+# Hovering the A/H heading reveals the ratio's meaning and the human-gap rule
+# in force; the columns are laid out once the list is mapped.
+pack .s -fill both -expand 1
+update
+set ns [info object namespace $SL]
+set i [lsearch -index 0 [$SL effective_column_spec] ah]
+$SL on_header_motion [expr {[lindex [set ${ns}::ColRightX] $i] + 6}]
+after 400 {set ::revealed 1}
+vwait ::revealed
+check "hovering the A/H heading reveals the rule that made the human figure" \
+    [string match "*Machine time over human time*up to 30 min counts in full, a longer one as 5 min*" \
+        [::questlog::ui::reveal::shown]] 1
+$SL header_peek ""
+check "leaving the heading takes the reveal down" [::questlog::ui::reveal::shown] ""
+
 ::questlog::path::_real_file delete -force $SAND
 if {$fails > 0} {
     puts "$fails failures"

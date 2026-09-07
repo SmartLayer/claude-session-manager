@@ -155,6 +155,13 @@ oo::class create ::questlog::ui::Toolbar {
         # placeholder hint matches the configured trigger.
         ttk::frame $Top.search
         pack $Top.search -side top -fill x -padx 6 -pady {6 3}
+        # The ⋯ at the row's right end holds what is neither a search nor a
+        # bound; more_menu hands its menu over, empty, for the app to fill.
+        # Packed before the field so it keeps the edge the entry expands toward.
+        ttk::menubutton $Top.search.more -text ⋯ -style Toolbutton \
+            -menu $Top.search.more.m -direction below
+        menu $Top.search.more.m -tearoff 0
+        pack $Top.search.more -side right -padx {4 0}
         set live [expr {[::questlog::config::get search_trigger] eq "live"}]
         set ph [expr {$live \
             ? "type one or more words; all must appear somewhere in the session" \
@@ -628,6 +635,9 @@ oo::class create ::questlog::ui::Toolbar {
     # this (via app.tcl) to defer while typing. False under search_trigger=enter,
     # where no keystroke advances the deadline.
     method is_typing {} { return [$Field is_typing] }
+
+    # The search row's ⋯ menu, for the app to fill (see build).
+    method more_menu {} { return $Top.search.more.m }
 
 
     # ---- the criteria, as querybuilder sees them ---------------------------
