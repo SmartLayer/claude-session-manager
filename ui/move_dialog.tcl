@@ -100,7 +100,7 @@ proc ::questlog::ui::move_dialog::open {parent count current_folder folders on_d
     pack $Top.f.btn.ok     -side right
     pack $Top.f.btn.cancel -side right -padx {0 6}
 
-    bind $Tv <Double-Button-1>      ::questlog::ui::move_dialog::confirm
+    bind $Tv <Double-Button-1>      {::questlog::ui::move_dialog::confirm; break}
     bind $Tv <<TreeviewSelect>>     ::questlog::ui::move_dialog::on_select
     bind $Top.f.erow.entry <Return> ::questlog::ui::move_dialog::confirm
     bind $Top <Escape>              ::questlog::ui::move_dialog::cancel
